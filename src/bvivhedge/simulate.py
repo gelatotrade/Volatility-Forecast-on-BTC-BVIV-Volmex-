@@ -12,8 +12,9 @@ little else:
 * compound-Poisson jumps, clustered in stress, that kick variance up (the gap
   risk a gated hedge can miss);
 * intraday and weekend seasonality in volatility and volume;
-* an implied-volatility index equal to the model's own 30-day variance forecast,
-  inflated by a variance risk premium and perturbed by persistent sentiment;
+* an implied-volatility index equal to the model's own 30-day variance forecast
+  (exact over regime paths by Feynman-Kac), inflated by a variance risk premium
+  and perturbed by persistent sentiment;
 * a BVIV perpetual whose mark prices in the index's mean reversion and whose
   funding charges long-volatility holders a calibrated carry.
 
@@ -25,12 +26,12 @@ bar's volume-weighted price behave like exchange klines (where
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
 from scipy.linalg import expm
 from scipy.signal import lfilter
-from scipy.stats import norm
 
 from .constants import BARS_PER_DAY, DAYS_PER_YEAR, DT, IV_HORIZON_DAYS, MINUTES_PER_BAR
 
@@ -167,17 +168,40 @@ def generator_matrix(params: MarketParams) -> np.ndarray:
     return q
 
 
-def effective_fast_level(params: MarketParams) -> tuple[np.ndarray, np.ndarray]:
-    """Regime levels of the fast log-variance factor including the drift that jump kicks add,
-    and the kicks' variance contribution rate (per year)."""
+def _kick_mgf(c: np.ndarray, params: MarketParams) -> np.ndarray:
+    """E[exp(c * kick)] per regime for kick = k0 |J| / sd, J ~ N(mean_R, sd^2) (Gauss-Hermite)."""
+    gh_x, gh_w = np.polynomial.hermite.hermgauss(20)
+    jumps = np.asarray(params.jump_mean)[:, None] + params.jump_std * np.sqrt(2.0) * gh_x[None, :]
+    kicks = params.jump_var_kick * np.abs(jumps) / params.jump_std                      # (3, q)
+    return (np.exp(c[..., None, None] * kicks) * gh_w / np.sqrt(np.pi)).sum(axis=-1)    # (..., 3)
+
+
+@lru_cache(maxsize=64)
+def _fast_factor_mgf(params: MarketParams, offset: float, nodes: int) -> np.ndarray:
+    """E_i[exp(x_fast(s) - x_fast(0) e^{-a s} - Gaussian part)] for each node s and start regime i.
+
+    Between now and s the fast factor integrates its regime level through the
+    OU kernel a e^{-a(s-u)} and collects jump kicks discounted by e^{-a(s-u)}.
+    By Feynman-Kac for a finite Markov chain, the expectation over regime paths
+    is a time-ordered product of matrix exponentials of Q + diag(V(u)) with the
+    potential V(u, j) = a e^{-a(s-u)} m_j + lambda_j (E[exp(e^{-a(s-u)} kick_j)] - 1).
+    """
     p = params
-    mu, sd = np.asarray(p.jump_mean), p.jump_std
+    q = generator_matrix(p)
+    a = p.kappa_fast
+    m = 2.0 * np.asarray(p.regime_log_vol)
     lam = np.asarray(p.jump_rate)
-    abs_j = sd * np.sqrt(2 / np.pi) * np.exp(-(mu**2) / (2 * sd**2)) + mu * (1 - 2 * norm.cdf(-mu / sd))
-    kick_mean = p.jump_var_kick * abs_j / sd
-    kick_sq = p.jump_var_kick**2 * (mu**2 + sd**2) / sd**2
-    level = 2.0 * np.asarray(p.regime_log_vol) + lam * kick_mean / p.kappa_fast
-    return level, lam * kick_sq
+    out = np.empty((nodes, 3))
+    for n, s in enumerate(offset + (np.arange(nodes) + 0.5) / nodes * (IV_HORIZON_DAYS / DAYS_PER_YEAR)):
+        steps = max(8, int(np.ceil(s * DAYS_PER_YEAR * 8)))          # 3-hour steps
+        du = s / steps
+        f = np.ones(3)
+        for u in (np.arange(steps)[::-1] + 0.5) * du:                # backward in time
+            w = np.exp(-a * (s - u))
+            potential = a * w * m + lam * (_kick_mgf(np.asarray(w), p) - 1.0)
+            f = expm((q + np.diag(potential)) * du) @ f
+        out[n] = f
+    return out
 
 
 def _variance_nodes(
@@ -189,24 +213,24 @@ def _variance_nodes(
     Returns per-node contributions ``ev`` (n x nodes, already divided by
     ``nodes``), the factor loadings ``e_slow``/``e_fast`` of each node (for
     derivatives) and the jump-variance term.  The slow factor is a Gaussian OU;
-    the fast factor tracks the regime level, so E[exp(x_fast)] combines its
-    decaying gap to the current level with the exact regime transition
-    probabilities P(s) = expm(Q s).
+    the fast factor's regime-driven drift and jump kicks are integrated exactly
+    over regime paths (:func:`_fast_factor_mgf`); the jump variance of returns
+    is mixed with the transition probabilities P(s) = expm(Q s).
     """
     p = params
     theta0 = 2.0 * np.log(p.vol_level)
-    level, kick_var_rate = effective_fast_level(p)
     s = offset + (np.arange(nodes) + 0.5) / nodes * (IV_HORIZON_DAYS / DAYS_PER_YEAR)
     a, ks = p.kappa_fast, p.kappa_slow
     e_fast, e_slow = np.exp(-a * s), np.exp(-ks * s)
-    trans = np.stack([expm(generator_matrix(p) * si) for si in s])          # (nodes, 3, 3)
-    level_mix = (trans @ np.exp(level))[:, regime].T                         # (n, nodes)
-    var_fast = (p.xi_fast**2 + kick_var_rate[regime][:, None]) / (2 * a) * (1 - e_fast**2)[None, :]
+    regime_part = _fast_factor_mgf(p, float(offset), nodes)[:, regime].T                # (n, nodes)
+    var_fast = (p.xi_fast**2 / (2 * a) * (1 - e_fast**2))[None, :]
     var_slow = (p.xi_slow**2 / (2 * ks) * (1 - e_slow**2))[None, :]
     log_ev = (theta0 + x_slow[:, None] * e_slow[None, :] + 0.5 * var_slow
-              + (x_fast - level[regime])[:, None] * e_fast[None, :] + 0.5 * var_fast)
-    ev = np.exp(log_ev) * level_mix / nodes
-    jump_var = (np.asarray(p.jump_rate) * (np.asarray(p.jump_mean) ** 2 + p.jump_std**2))[regime]
+              + x_fast[:, None] * e_fast[None, :] + 0.5 * var_fast)
+    ev = np.exp(log_ev) * regime_part / nodes
+    trans = np.stack([expm(generator_matrix(p) * si) for si in s])                       # (nodes, 3, 3)
+    jump_var_by_regime = np.asarray(p.jump_rate) * (np.asarray(p.jump_mean) ** 2 + p.jump_std**2)
+    jump_var = (trans @ jump_var_by_regime).mean(axis=0)[regime]
     return ev, e_slow, e_fast, jump_var
 
 

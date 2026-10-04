@@ -13,8 +13,9 @@ def daily_book(pnl: pd.DataFrame, warmup_days: int = 0) -> pd.DataFrame:
     day = pnl.index.floor("1D")
     d = pnl[["btc", "hedge", "funding", "carry", "cost", "traded_notional"]].groupby(day).sum()
     d["notional"] = pnl["notional"].groupby(day).mean()
-    d["time_on"] = (pnl["position"] > 0).groupby(day).mean()
-    capital = pnl["btc_notional"].groupby(day).first()  # notional at the start of the day
+    d["time_on"] = (pnl["notional"] > 1e-3 * pnl["btc_notional"]).groupby(day).mean()
+    prior = pnl["btc_notional"].shift(1).fillna(pnl["btc_notional"].iloc[0])
+    capital = prior.groupby(day).first()  # notional at the prior close
     d = d.div(capital, axis=0).assign(time_on=d["time_on"])
     d["total"] = d["btc"] + d["hedge"] - d["cost"]
     return d.iloc[warmup_days:]

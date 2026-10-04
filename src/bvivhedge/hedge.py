@@ -37,7 +37,7 @@ class HedgeConfig:
     qty: float = 1.0                    # BTC held
     instrument: str = "spot"            # "spot" or "perp"
     beta_halflife_days: float = 14.0    # EWMA memory of the spot-vol regression
-    downside_prior_days: float = 2.0    # shrinkage of the downside beta to the full-sample one
+    downside_prior_days: float = 2.0    # shrinkage of the downside ratio to the full-sample one
     anchor: str = "rolling"             # "rolling" 24h VWAP or "session" (UTC day)
     rebalance_band: float = 0.25        # trade only if the target moves > 25% of the position
     fee_bps: float = 6.0                # per side, on traded BVIV-perp notional
@@ -79,11 +79,14 @@ DEFAULT_RULES = (
 
 # --------------------------------------------------------------------------- estimators
 def ewma_beta(x: np.ndarray, y: np.ndarray, halflife_bars: float, mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Zero-mean EWMA regression slope of x on y, optionally on masked bars only.
+    """EWMA regression slope of x on y through the origin, optionally on masked bars only.
 
     Returns the slope and the effective number of observations behind it.
-    Fifteen-minute means are negligible relative to their dispersion, so
-    moments are not demeaned.
+    On the full sample, 15-minute means are negligible relative to their
+    dispersion, so this is the usual covariance ratio.  On a masked subsample
+    (falling bars) the moments are deliberately *not* demeaned: the slope
+    E[x y | mask] / E[y^2 | mask] is the hedge ratio that minimises the
+    downside second moment, i.e. it also offsets the mean loss on falling bars.
     """
     lam = 0.5 ** (1.0 / halflife_bars)
     m = np.ones_like(x) if mask is None else mask.astype(float)
@@ -134,7 +137,7 @@ def build_signals(bars: pd.DataFrame, cfg: HedgeConfig, daily_rv_forecast: pd.Se
     z = vwap_zscore(bars, vwap, vol["sigma_day"], window)
 
     beta_all, _ = ewma_beta(r, d_mark, hl)
-    beta_dn, n_dn = ewma_beta(r, d_mark, hl, mask=r < 0)   # downside semi-beta: the crash response
+    beta_dn, n_dn = ewma_beta(r, d_mark, hl, mask=r < 0)   # downside second-moment hedge ratio: the crash response
     w = n_dn / (n_dn + cfg.downside_prior_days * BARS_PER_DAY)
     beta_dn = w * beta_dn + (1 - w) * beta_all
 

@@ -89,8 +89,18 @@ def fetch_binance_klines(start: str, end: str, symbol: str = "BTCUSDT", market: 
         blob = _cached(f"binance_{market}_{fname}", lambda u=url: _get(u))
         with zipfile.ZipFile(io.BytesIO(blob)) as zf:
             frames.append(parse_binance_klines(zf.read(zf.namelist()[0])))
-    out = pd.concat(frames).sort_index()
-    return out[~out.index.duplicated()].asfreq(BAR).ffill()
+    return regularise_klines(pd.concat(frames))
+
+
+def regularise_klines(klines: pd.DataFrame) -> pd.DataFrame:
+    """Sorted, de-duplicated, gap-free 15m klines: a missing bar is flat at the last close with zero volume."""
+    out = klines.sort_index()
+    out = out[~out.index.duplicated()].asfreq(BAR)
+    out["close"] = out["close"].ffill()
+    for col in ("open", "high", "low"):
+        out[col] = out[col].fillna(out["close"])
+    out[["volume", "quote_volume"]] = out[["volume", "quote_volume"]].fillna(0.0)
+    return out
 
 
 def parse_binance_funding(payload: bytes) -> pd.Series:
@@ -180,12 +190,16 @@ def fetch_volmex_bviv(start: str, end: str, symbol: str = "BVIV", api_key: str |
 
     key = api_key or os.environ.get("VOLMEX_API_KEY", "")
     parts = []
+    current = pd.Timestamp.now(tz="UTC").tz_localize(None).to_period("M")
     for month in pd.period_range(start, end, freq="M"):
         t0 = int(month.start_time.tz_localize("UTC").timestamp())
         t1 = int(month.end_time.tz_localize("UTC").timestamp())
         url = (f"https://rest-v1.volmex.finance/v2/history?symbol={symbol}&resolution=15&from={t0}&to={t1}"
                + (f"&apiKey={key}" if key else ""))
-        parts.append(parse_volmex_history(_cached(f"volmex_{symbol}_{month}.json", lambda u=url: _get(u))))
+        name = f"volmex_{symbol}_15_{month}_{'key' if key else 'nokey'}.json"
+        # never cache a month that is still in progress
+        blob = _get(url) if month >= current else _cached(name, lambda u=url: _get(u))
+        parts.append(parse_volmex_history(blob))
     s = pd.concat(parts).sort_index()
     return s[~s.index.duplicated()].resample(BAR, label="left", closed="left").last()
 
@@ -206,7 +220,7 @@ def fetch_deribit_dvol(start: str, end: str, currency: str = "BTC") -> pd.Series
     while cursor and cursor > t0:
         url = ("https://www.deribit.com/api/v2/public/get_volatility_index_data?"
                f"currency={currency}&start_timestamp={t0}&end_timestamp={cursor}&resolution=60")
-        s, cursor = parse_deribit_dvol(_cached(f"deribit_dvol_{currency}_{cursor}.json", lambda u=url: _get(u)))
+        s, cursor = parse_deribit_dvol(_cached(f"deribit_dvol_{currency}_{t0}_{cursor}.json", lambda u=url: _get(u)))
         if s.empty:
             break
         parts.append(s)
@@ -230,7 +244,8 @@ def assemble_live_bars(klines: pd.DataFrame, index_15m: pd.Series, perp: pd.Data
     Without perpetual data the mark is the index and funding is a constant carry
     of ``hedge_carry`` vol points a year (the simulator's baseline).
     """
-    bars = klines.copy()
+    lo, hi = index_15m.first_valid_index(), index_15m.last_valid_index()
+    bars = klines.loc[lo:hi].copy()                  # never extrapolate the index beyond its coverage
     bars["bviv"] = index_15m.reindex(bars.index).ffill()
     if perp is not None and not perp.empty:
         p = perp.reindex(bars.index).ffill()
@@ -244,7 +259,10 @@ def assemble_live_bars(klines: pd.DataFrame, index_15m: pd.Series, perp: pd.Data
         bars["bviv_funding"] = hedge_carry * DT
         bars["bviv_carry"] = hedge_carry * DT
     if btc_funding_8h is not None and not btc_funding_8h.empty:
-        rate = btc_funding_8h.reindex(bars.index, method="ffill").fillna(0.0)
+        # a rate settled at T accrues over (T - 8h, T]: stamp it at the start of its interval
+        accrual = btc_funding_8h.copy()
+        accrual.index = accrual.index.floor(BAR) - pd.Timedelta("8h")
+        rate = accrual.sort_index().reindex(bars.index, method="ffill").fillna(0.0)
         bars["btc_funding"] = rate * 3 * 365          # annualised
     else:
         bars["btc_funding"] = 0.0

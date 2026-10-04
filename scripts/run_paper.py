@@ -21,6 +21,7 @@ import sys
 import warnings
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,7 @@ from bvivhedge.simulate import MarketParams, simulate_market  # noqa: E402
 RESULTS = ROOT / "results"
 PAPER = ROOT / "paper"
 SIM_DAYS = 900
+ROBUST_SEED0 = 20_000   # robustness scenarios run on their own, disjoint seed block
 
 def final_rules(selection: dict[str, str]) -> list[Rule]:
     return [Rule("Unhedged", "unhedged"), rule_from_key("always|1"), rule_from_key(selection["switch"]),
@@ -80,7 +82,8 @@ def stage_robust(n: int, params: MarketParams, cfg: HedgeConfig, selection: dict
     rules = final_rules(selection)[:4]
     rows = []
     for name, p_over, c_over in SCENARIOS:
-        mc = monte_carlo(range(n), params.with_(**p_over), cfg.with_(**c_over), rules, Protocol(full_forecasts=False))
+        seeds = range(ROBUST_SEED0, ROBUST_SEED0 + n)   # common random numbers across scenarios
+        mc = monte_carlo(seeds, params.with_(**p_over), cfg.with_(**c_over), rules, Protocol(full_forecasts=False))
         m = mc["metrics"]
         med = summarise_metrics(m)
         d = paired(m, "es_red", selection["ratchet"], "always|1")
@@ -160,6 +163,7 @@ def crash_cluster_diagnostic(params: MarketParams, cfg: HedgeConfig, selection: 
 
 
 def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str], compile_pdf: bool):
+    PAPER.mkdir(parents=True, exist_ok=True)
     fig_dir, tab_dir = PAPER / "figures", PAPER / "tables"
     fig_dir.mkdir(parents=True, exist_ok=True)
     tab_dir.mkdir(parents=True, exist_ok=True)
@@ -219,10 +223,12 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
     d_tail = paired(test, "tail_offset", rt, "always|1")
     fc_twin = rt[:-1] + ("1" if rt.endswith("0") else "0")
     d_fc = paired(test, "es_red", fc_twin, rt)
-    ladder = med_all[med_all.index.str.startswith("always|")]
+    ladder = med_all[med_all.index.str.startswith("always|")].sort_values("hedge_cost")
     grid = med_all[med_all.index.str.startswith("ratchet|")]
-    best_static = grid["hedge_cost"].map(lambda c: ladder.loc[ladder["hedge_cost"] <= c, "es_red"].max())
-    above = float((grid["es_red"] > best_static.fillna(-1e9)).mean())
+    # the blue line of the frontier figure: unhedged origin, then the scaled static hedges
+    line_x = np.r_[0.0, ladder["hedge_cost"].to_numpy()]
+    line_y = np.r_[0.0, ladder["es_red"].to_numpy()]
+    above = float((grid["es_red"].to_numpy() > np.interp(grid["hedge_cost"].to_numpy(), line_x, line_y)).mean())
     diag = crash_cluster_diagnostic(params, cfg, selection)
     rr, ss = rule_from_key(rt), rule_from_key(sw)
     f = fsum.set_index(["h", "model"])
@@ -293,15 +299,17 @@ def compile_paper():
 def run_live(args, cfg: HedgeConfig, selection: dict[str, str]):
     from bvivhedge import data
 
+    first = f"{args.start}-01"
+    last = (pd.Period(args.end, "M") + 1).start_time.strftime("%Y-%m-%d")   # exclusive end: whole last month
     klines = data.fetch_binance_klines(args.start, args.end, market="perp" if args.book == "perp" else "spot")
-    funding = data.fetch_binance_funding(f"{args.start}-01", f"{args.end}-28")
-    perp = data.fetch_bitfinex_bviv(f"{args.start}-01", f"{args.end}-28") if args.iv == "bitfinex" else None
+    funding = data.fetch_binance_funding(first, last)
+    perp = data.fetch_bitfinex_bviv(first, last) if args.iv == "bitfinex" else None
     if args.iv == "bitfinex":
         index = perp["index"]
     elif args.iv == "volmex":
         index = data.fetch_volmex_bviv(args.start, args.end)
     elif args.iv == "dvol":
-        index = data.fetch_deribit_dvol(f"{args.start}-01", f"{args.end}-28")
+        index = data.fetch_deribit_dvol(first, last)
     else:
         index = data.load_index_csv(args.iv)
     bars = data.assemble_live_bars(klines, index, perp, funding)
@@ -328,9 +336,13 @@ def main():
     ap.add_argument("--book", default="spot", choices=["spot", "perp"])
     args = ap.parse_args()
     if args.quick:
+        # smoke run: tiny samples, written to results/quick/ so the study's outputs stay intact
+        global RESULTS, PAPER, GRID_PATHS
         args.train_paths, args.test_paths, args.robust_paths = 8, 8, 8
+        RESULTS, PAPER, GRID_PATHS = ROOT / "results" / "quick", ROOT / "results" / "quick" / "paper", 4
+        args.no_pdf = True
 
-    RESULTS.mkdir(exist_ok=True)
+    RESULTS.mkdir(parents=True, exist_ok=True)
     params, cfg = MarketParams(days=SIM_DAYS), HedgeConfig()
     sel_path = RESULTS / "selection.json"
 

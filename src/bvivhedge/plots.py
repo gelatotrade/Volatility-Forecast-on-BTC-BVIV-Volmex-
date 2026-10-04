@@ -124,7 +124,7 @@ def fig_frontier(med: pd.DataFrame, iqr: pd.DataFrame, selected: dict[str, str],
         pts = med[fam == key]
         ax.scatter(pts["hedge_cost"], pts["es_red"], s=14, color=color, alpha=0.55, linewidths=0, label=label, zorder=2)
     ladder = med[fam == "always"].sort_values("hedge_cost")
-    ax.plot(ladder["hedge_cost"], ladder["es_red"], color=BLUE, lw=1.4, zorder=3)
+    ax.plot(np.r_[0.0, ladder["hedge_cost"]], np.r_[0.0, ladder["es_red"]], color=BLUE, lw=1.4, zorder=3)
     ax.scatter(ladder["hedge_cost"], ladder["es_red"], s=26, color=BLUE, edgecolors="#fcfcfb", linewidths=1.5,
                zorder=4, label="Always-on, scaled 0.5x-3x")
     for k, row in ladder.iterrows():

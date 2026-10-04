@@ -47,8 +47,8 @@ def intraday_vol_forecast(bars: pd.DataFrame, halflife_bars: int = BARS_PER_DAY,
         prof = seasonal_variance_profile(r.iloc[lo:i])
         season[i : i + step] = prof.to_numpy()[how[i : i + step]]
     desea = r**2 / season
-    desea.iloc[0] = desea.iloc[1:BARS_PER_DAY + 1].mean()  # seed the recursion with the first day's level
-    ewma = desea.ewm(halflife=halflife_bars, adjust=False).mean()
+    desea.iloc[0] = np.nan                       # no return before the first bar; start the EWMA causally
+    ewma = desea.ewm(halflife=halflife_bars, adjust=True, ignore_na=True).mean()
     sigma_day = np.sqrt(ewma * BARS_PER_DAY)
     return pd.DataFrame({"sigma_day": sigma_day, "season": season}, index=bars.index)
 

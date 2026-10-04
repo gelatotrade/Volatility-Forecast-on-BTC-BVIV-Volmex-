@@ -21,7 +21,9 @@ def test_session_vwap_resets_at_utc_midnight(bars):
 
 
 def test_signals_use_no_future_information(bars):
-    """Truncating the sample must not change any value already computed."""
+    """Truncating the sample must not change any value already computed -- also inside the first day."""
+    short = intraday_vol_forecast(bars.iloc[:20])
+    assert np.allclose(intraday_vol_forecast(bars)["sigma_day"].iloc[:20], short["sigma_day"], equal_nan=True)
     cut = 40 * BARS_PER_DAY
     full = intraday_vol_forecast(bars)
     part = intraday_vol_forecast(bars.iloc[:cut])

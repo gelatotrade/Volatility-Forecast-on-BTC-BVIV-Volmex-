@@ -55,11 +55,13 @@ def hour_of_week(index: pd.DatetimeIndex) -> np.ndarray:
 def seasonal_variance_profile(returns: pd.Series, shrink: float = 0.5) -> pd.Series:
     """Relative 15m variance by hour-of-week (mean 1), shrunk towards the hour-of-day profile.
 
-    Shrinkage stabilises the 168-cell estimate; the result multiplies a
-    de-seasonalised variance forecast.
+    Returns are winsorised at four robust standard deviations so that a few
+    jumps cannot dominate a cell, and the 168-cell estimate is shrunk towards
+    the hour-of-day profile; the result multiplies a de-seasonalised forecast.
     """
     how = hour_of_week(returns.index)
-    sq = returns**2
+    scale = 1.4826 * (returns - returns.median()).abs().median()
+    sq = returns.clip(-4 * scale, 4 * scale) ** 2
     hw = sq.groupby(how).mean()
     hd = sq.groupby(returns.index.hour).mean()
     hd_on_week = pd.Series(hd.to_numpy()[np.arange(168) % 24], index=np.arange(168))

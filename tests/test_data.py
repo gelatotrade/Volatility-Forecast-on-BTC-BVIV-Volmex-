@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from bvivhedge.data import (
-    assemble_live_bars, parse_binance_funding, parse_binance_klines, parse_bitfinex_candles,
+    assemble_live_bars, regularise_klines, parse_binance_funding, parse_binance_klines, parse_bitfinex_candles,
     parse_bitfinex_status, parse_deribit_dvol, parse_volmex_history,
 )
 
@@ -53,3 +53,23 @@ def test_volmex_parser_accepts_udf_and_records():
     rec = parse_volmex_history(json.dumps([{"time": 1704067200000, "close": 52.5}]).encode())
     assert udf.index[0] == rec.index[0] == pd.Timestamp("2024-01-01", tz="UTC")
     assert udf.iloc[0] == rec.iloc[0] == 52.5
+
+
+def test_kline_gaps_carry_no_volume():
+    idx = pd.date_range("2024-01-01", periods=4, freq="15min", tz="UTC")
+    k = pd.DataFrame({"open": 1.0, "high": 2.0, "low": 0.5, "close": [1.0, 1.5, 1.2, 1.3],
+                      "volume": 3.0, "quote_volume": 4.0}, index=idx).drop(idx[2])
+    out = regularise_klines(k)
+    assert len(out) == 4 and out["volume"].iloc[2] == 0.0 and out["close"].iloc[2] == 1.5
+    assert out["high"].iloc[2] == 1.5
+
+
+def test_live_bars_trim_to_index_and_accrue_funding_forward():
+    idx = pd.date_range("2024-01-01", periods=96 * 2, freq="15min", tz="UTC")
+    k = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0, "quote_volume": 1.0}, index=idx)
+    iv = pd.Series(50.0, index=idx[10:150])
+    funding = pd.Series([1e-4, 3e-4], index=pd.to_datetime(["2024-01-01 08:00", "2024-01-01 16:00"], utc=True))
+    bars = assemble_live_bars(k, iv, btc_funding_8h=funding)
+    assert bars.index[0] == idx[10] and bars.index[-1] == idx[149]
+    # the rate settled at 16:00 accrues from 08:00 onwards
+    assert np.isclose(bars.loc[pd.Timestamp("2024-01-01 09:00", tz="UTC"), "btc_funding"], 3e-4 * 3 * 365)

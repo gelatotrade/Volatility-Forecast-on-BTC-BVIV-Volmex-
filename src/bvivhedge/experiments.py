@@ -27,7 +27,7 @@ TRAIN_SEED0 = 10_000
 class Protocol:
     """Sample splits in days from the first bar."""
 
-    hedge_eval_start: int = 200       # estimators and forecasts are warm by then
+    hedge_eval_start: int = 270       # after the 30-day HAR-IV forecast and its cheapness signal exist
     forecast_eval_start: int = 365    # out-of-sample forecast evaluation from here
     horizons: tuple[int, ...] = HORIZONS
     full_forecasts: bool = True       # False: only the 30-day HAR-IV forecast used for sizing
@@ -58,14 +58,15 @@ def _calibration_row(seed: int, bars: pd.DataFrame, daily: pd.DataFrame, signals
     rv30 = daily["rv"][::-1].rolling(30).mean()[::-1].shift(-1)
     iv_d = bars["bviv"].resample("1D").last().reindex(daily.index)
     day_r = daily["ret"]
+    gap = iv_d - np.sqrt(rv30 * 365) * 100
     return {
         "seed": seed,
         "rv": float(np.sqrt(daily["rv"].mean() * 365) * 100),
         "iv": float(bars["bviv"].mean()),
         "iv_p05": float(bars["bviv"].quantile(0.05)),
         "iv_p95": float(bars["bviv"].quantile(0.95)),
-        "vrp": float((iv_d - np.sqrt(rv30 * 365) * 100).mean()),
-        "iv_above_rv": float(((iv_d - np.sqrt(rv30 * 365) * 100) > 0).mean() * 100),
+        "vrp": float(gap.mean()),
+        "iv_above_rv": float((gap.dropna() > 0).mean() * 100),
         "corr_15m": float(r.corr(d_iv)),
         "corr_down": float(r[r < 0].corr(d_iv[r < 0])),
         "corr_up": float(r[r > 0].corr(d_iv[r > 0])),
