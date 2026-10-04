@@ -66,3 +66,16 @@ def test_rules_run_and_unhedged_is_zero(bars):
     m = book_metrics(daily_book(results["Always-on"]), base)
     assert m["notional"] > 0 and np.isfinite(m["es_red"])
     assert (results["Ratchet"]["position"] >= 0).all()
+
+
+def test_placebo_preserves_trigger_count(bars):
+    from bvivhedge.hedge import target_hedge
+    cfg = HedgeConfig()
+    sig = build_signals(bars, cfg)
+    real = Rule("r", "ratchet", z_enter=-1.0, halflife_days=1.0)
+    fake = Rule("p", "ratchet", z_enter=-1.0, halflife_days=1.0, placebo_shift_days=17.0)
+    h_real, _ = target_hedge(bars, sig, real, cfg)
+    h_fake, _ = target_hedge(bars, sig, fake, cfg)
+    assert not np.allclose(h_real, h_fake)
+    z = np.nan_to_num(sig["z"].to_numpy(), nan=0.0) < -1.0
+    assert np.roll(z, 17 * 96).sum() == z.sum()

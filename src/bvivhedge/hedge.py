@@ -65,6 +65,7 @@ class Rule:
     use_forecast: bool = False  # scale the overlay by forecast cheapness
     size_gamma: float = 1.0
     size_bounds: tuple[float, float] = (0.5, 1.5)
+    placebo_shift_days: float = 0.0  # ratchet only: circularly shift the trigger series (timing placebo)
 
 
 DEFAULT_RULES = (
@@ -170,7 +171,11 @@ def target_hedge(bars: pd.DataFrame, sig: pd.DataFrame, rule: Rule, cfg: HedgeCo
         if rule.use_forecast:
             lo, hi = rule.size_bounds
             size = np.clip(np.exp(rule.size_gamma * sig["cheapness"].to_numpy()), lo, hi)
-        overlay = ratchet(np.nan_to_num(z, nan=0.0) < rule.z_enter, rule.halflife_days * BARS_PER_DAY)
+        trigger = np.nan_to_num(z, nan=0.0) < rule.z_enter
+        if rule.placebo_shift_days:
+            # same number and clustering of triggers, timing scrambled: isolates the VWAP information
+            trigger = np.roll(trigger, int(rule.placebo_shift_days * BARS_PER_DAY))
+        overlay = ratchet(trigger, rule.halflife_days * BARS_PER_DAY)
         core = rule.floor * mv_all
         h = core + overlay * np.maximum(mv_down * size - core, 0.0)
     elif rule.kind == "oracle":

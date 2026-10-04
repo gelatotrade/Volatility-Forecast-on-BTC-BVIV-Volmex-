@@ -7,7 +7,8 @@
                                                       # same pipeline on Binance + Bitfinex BVIV data
 
 Stages: train (rule selection on training seeds) -> test (Monte Carlo on disjoint
-test seeds) -> robust (scenario grid) -> paper (figures, tables, macros, PDF).
+test seeds) -> robust (scenario grid) -> placebo (timing placebo for the ratchet)
+-> paper (figures, tables, macros, PDF).
 """
 
 from __future__ import annotations
@@ -91,6 +92,28 @@ def stage_robust(n: int, params: MarketParams, cfg: HedgeConfig, selection: dict
     pd.DataFrame(rows).to_csv(RESULTS / "robustness.csv", index=False)
 
 
+PLACEBO_SHIFTS = (35, 91, 147, 203, 259)  # days; multiples of 7 keep the triggers' hour-of-week profile
+
+
+def stage_placebo(n: int, params: MarketParams, cfg: HedgeConfig, selection: dict[str, str]):
+    """Ratchet vs. the same ratchet with its trigger series circularly shifted (timing placebo)."""
+    base = rule_from_key(selection["ratchet"])
+    placebos = [Rule(f"placebo|{d}", "ratchet", z_enter=base.z_enter, halflife_days=base.halflife_days, floor=base.floor,
+                     use_forecast=base.use_forecast, placebo_shift_days=float(d)) for d in PLACEBO_SHIFTS]
+    rules = [Rule("Unhedged", "unhedged"), rule_from_key("always|1"), base, *placebos]
+    mc = monte_carlo(range(n), params, cfg, rules, Protocol(full_forecasts=False))
+    mc["metrics"].to_csv(RESULTS / "placebo.csv", index=False)
+
+
+def placebo_summary(placebo: pd.DataFrame, ratchet_key: str) -> dict[str, float]:
+    w = placebo.pivot(index="seed", columns="strategy", values="es_red")
+    fake = w[[c for c in w.columns if c.startswith("placebo|")]].mean(axis=1)
+    d = pd.DataFrame({"seed": w.index, "strategy": "diff", "es_red": (w[ratchet_key] - fake).to_numpy()})
+    zero = d.assign(strategy="zero", es_red=0.0)
+    stats = paired(pd.concat([d, zero]), "es_red", "diff", "zero")
+    return {"es_placebo": float(fake.median()), "es_ratchet": float(w[ratchet_key].median()), **stats}
+
+
 def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str], compile_pdf: bool):
     fig_dir, tab_dir = PAPER / "figures", PAPER / "tables"
     fig_dir.mkdir(parents=True, exist_ok=True)
@@ -99,6 +122,7 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
     evals = pd.read_csv(RESULTS / "test_forecast_evals.csv")
     calib = pd.read_csv(RESULTS / "test_calibration.csv")
     robust = pd.read_csv(RESULTS / "robustness.csv")
+    placebo = placebo_summary(pd.read_csv(RESULTS / "placebo.csv"), selection["ratchet"])
     sw, rt = selection["switch"], selection["ratchet"]
 
     # ---- figures on a representative path (test seed 0)
@@ -168,6 +192,9 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         "corr_daily": f"{calib['corr_daily'].median():.2f}", "corr_down": f"{calib['corr_down'].median():.2f}",
         "corr_up": f"{calib['corr_up'].median():.2f}", "vrp": calib["vrp"].median(),
         "hedge_carry": f"{params.hedge_carry:g}", "fee": f"{cfg.fee_bps:g}", "slip": f"{cfg.slippage_bps:g}",
+        "es_red_placebo": placebo["es_placebo"], "d_es_placebo": f"{placebo['mean']:+.2f}",
+        "d_es_placebo_lo": f"{placebo['lo']:+.2f}", "d_es_placebo_hi": f"{placebo['hi']:+.2f}",
+        "share_placebo": f"{100 * placebo['share_pos']:.0f}", "n_placebo": f"{len(PLACEBO_SHIFTS)}",
     }
     for r in robust.to_dict("records"):
         key = "rob." + r["scenario"].lower().replace("x0.5", "half").replace("x2", "double").replace(" 0", " zero").replace(" 12", " twelve")
@@ -214,7 +241,7 @@ def run_live(args, cfg: HedgeConfig, selection: dict[str, str]):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stage", choices=["all", "train", "test", "robust", "paper"], default="all")
+    ap.add_argument("--stage", choices=["all", "train", "test", "robust", "placebo", "paper"], default="all")
     ap.add_argument("--quick", action="store_true", help="few paths, for a smoke test")
     ap.add_argument("--train-paths", type=int, default=48)
     ap.add_argument("--test-paths", type=int, default=200)
@@ -244,6 +271,8 @@ def main():
         stage_test(args.test_paths, params, cfg)
     if args.stage in ("all", "robust"):
         stage_robust(args.robust_paths, params, cfg, selection)
+    if args.stage in ("all", "placebo"):
+        stage_placebo(args.test_paths, params, cfg, selection)
     if args.stage in ("all", "paper"):
         stage_paper(params, cfg, selection, compile_pdf=not args.no_pdf)
 
