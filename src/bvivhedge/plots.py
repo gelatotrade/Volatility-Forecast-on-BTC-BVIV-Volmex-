@@ -128,7 +128,7 @@ def fig_frontier(med: pd.DataFrame, iqr: pd.DataFrame, selected: dict[str, str],
     ax.scatter(ladder["hedge_cost"], ladder["es_red"], s=26, color=BLUE, edgecolors="#fcfcfb", linewidths=1.5,
                zorder=4, label="Always-on, scaled 0.5x-3x")
     for k, row in ladder.iterrows():
-        ax.annotate(f"{float(k.split('|')[1]):g}x", (row["hedge_cost"], row["es_red"]), xytext=(4, 4),
+        ax.annotate(f"{float(k.split('|')[1]):g}x", (row["hedge_cost"], row["es_red"]), xytext=(-4, 6), ha="right",
                     textcoords="offset points", color=INK2, fontsize=7)
     for family, key in selected.items():
         row = med.loc[key]
@@ -136,13 +136,15 @@ def fig_frontier(med: pd.DataFrame, iqr: pd.DataFrame, selected: dict[str, str],
         ax.errorbar(row["hedge_cost"], row["es_red"], yerr=[[row["es_red"] - iqr.loc[key, "q25"]], [iqr.loc[key, "q75"] - row["es_red"]]],
                     color=color, lw=1.0, capsize=0, zorder=5)
         ax.scatter(row["hedge_cost"], row["es_red"], s=60, marker="D", color=color, edgecolors=INK, linewidths=0.8, zorder=6)
-        ax.annotate("selected " + ("switch" if family == "switch" else "ratchet"), (row["hedge_cost"], row["es_red"]),
-                    xytext=(6, -10), textcoords="offset points", color=INK, fontsize=7)
+        ax.annotate("selected " + family, (row["hedge_cost"], row["es_red"]),
+                    xytext=(8, -14) if family == "ratchet" else (-8, 10), ha="left" if family == "ratchet" else "right",
+                    textcoords="offset points", color=INK, fontsize=7)
     ax.axhline(0, color=AXIS, lw=0.8)
     ax.set_xlabel("Hedge cost: carry premium + trading (% of BTC notional p.a., median)")
     ax.set_ylabel("ES$_{97.5}$ reduction (%, median)")
     ax.set_title("Tail protection per unit of cost", color=INK)
-    ax.legend(loc="lower right", handlelength=1.2)
+    ax.legend(loc="upper right", handlelength=1.2)
+    ax.set_xlim(left=0)
     fig.savefig(path)
     plt.close(fig)
 
@@ -168,10 +170,15 @@ def fig_forecasts(summary: pd.DataFrame, path: str):
     plt.close(fig)
 
 
-def pick_episode(sig: pd.DataFrame, after: pd.Timestamp, days: float = 4.0) -> slice:
-    """Window around the deepest VWAP breakdown after ``after`` (for the mechanics figure)."""
-    z = sig["z"].loc[after:]
-    t = z.idxmin()
-    half = pd.Timedelta(days=days / 2)
-    return slice(t - half * 0.8, t + half * 1.2)
-
+def pick_episode(sig: pd.DataFrame, after: pd.Timestamp, z_enter: float, quiet_days: float = 3.0,
+                 before_days: float = 1.5, after_days: float = 2.5) -> slice:
+    """Window around a *fresh* VWAP breakdown: the first trigger after ``quiet_days`` without one,
+    choosing the onset followed by the deepest breakdown (so the ratchet's step-up and decay are visible)."""
+    bars_per_day = int(pd.Timedelta("1D") / (sig.index[1] - sig.index[0]))
+    trig = (sig["z"] < z_enter).astype(int)
+    recent = trig.shift(1).rolling(int(quiet_days * bars_per_day), min_periods=1).max().fillna(0)
+    onsets = sig.index[(trig == 1) & (recent == 0) & (sig.index > after + pd.Timedelta(days=quiet_days))]
+    horizon = int(after_days * bars_per_day)
+    depth = {t: sig["z"].loc[t:].iloc[:horizon].min() for t in onsets}
+    t = min(depth, key=depth.get)
+    return slice(t - pd.Timedelta(days=before_days), t + pd.Timedelta(days=after_days))

@@ -40,7 +40,7 @@
 \input{numbers}
 
 \title{\vspace{-0.6em}\textbf{Hedging Bitcoin with Its Own Fear Gauge}\\[2pt]
-\large Volatility Forecasts, the Volmex \BVIV{} Index and the Limits of 15-Minute VWAP Timing}
+\large Volatility Forecasts, the Volmex \BVIV{} Index and What 15-Minute VWAP Timing Is Worth}
 \author{Gregor Albiez}
 \date{October 2026}
 
@@ -49,7 +49,7 @@
 \vspace{-1.2em}
 
 \begin{abstract}
-\noindent Bitcoin implied volatility has become directly tradable: perpetual futures on the Volmex \BVIV{} index have listed on Bitfinex since 2024 and on Hyperliquid since September 2026. We ask how BTC volatility should be forecast when a 30-day implied index is observable, and whether a long-\BVIV{} position timed by a VWAP signal on 15-minute bars hedges spot or perpetual BTC exposure better than a minimum-variance hedge. In a calibrated market where the \BVIV{} perpetual is priced without arbitrage, we evaluate seven forecasting models and \NRules{} hedging rules with strict separation between training and \NTest{} test paths. Implied volatility is the best forecast at 30 days, HAR-type models at one day, and HAR augmented with implied variance is robust across horizons. A minimum-variance \BVIV{} hedge cuts expected shortfall by \EsRedAlways\% for \CostAlways\% of notional a year; volatility hedges stay partial because BTC's spot-vol correlation is weak and changes sign across regimes. Switching the hedge on and off around VWAP destroys value through turnover. A VWAP \emph{ratchet} that adds protection on breakdowns lifts the ES reduction to \EsRedRatchet\%, but a placebo with identical trigger statistics and scrambled timing does just as well, and so does scaling the static hedge by 1.5. The gain is a size effect, not timing information. The timing placebo is therefore the yardstick for any intraday hedge signal, and our pipeline applies it unchanged to live Binance, Bitfinex and Volmex data.
+\noindent Bitcoin implied volatility has become directly tradable: perpetual futures on the Volmex \BVIV{} index have listed on Bitfinex since 2024 and on Hyperliquid since September 2026. We ask how BTC volatility should be forecast when a 30-day implied index is observable, and whether a long-\BVIV{} position timed by a VWAP signal on 15-minute bars hedges spot or perpetual BTC exposure better than a minimum-variance hedge. In a calibrated market where the \BVIV{} perpetual is priced without arbitrage, we evaluate seven forecasting models and \NRules{} hedging rules with strict separation between training and \NTest{} test paths. Implied volatility is the best forecast at 30 days, HAR-type models at one day, and HAR augmented with implied variance is robust across horizons. A minimum-variance \BVIV{} hedge cuts expected shortfall by \EsRedAlways\% for \CostAlways\% of notional a year; volatility hedges stay partial because BTC's spot-vol correlation is weak and changes sign across regimes. Switching the hedge on and off around VWAP destroys value through turnover. A VWAP \emph{ratchet}, which keeps a minimum-variance core and adds protection on breakdowns, lifts the ES reduction to \EsRedRatchet\%. A timing placebo shows what drives that gain. VWAP breakdowns do carry information: rules that hedge only after a breakdown beat randomly timed copies by up to \PgridMax{} percentage points. But such rules protect less and cost more than a core hedge, and once the core is held, the timing value vanishes and the gain is a size effect. The placebo is the yardstick for any intraday hedge signal, and our pipeline applies it unchanged to live Binance, Bitfinex and Volmex data.
 \end{abstract}
 
 \section{Introduction}\label{sec:intro}
@@ -88,7 +88,7 @@ The regressions are re-estimated daily on an expanding window that contains only
 
 \paragraph{Results.} Table~\ref{tab:forecast} and Figure~\ref{fig:forecast} confirm the pattern documented on Deribit data by \citet{hoang2020forecasting}:
 \begin{itemize}
-  \item At one day, the HAR family is best. HAR-IV has the lowest median loss ratio (\QlHarIvOne) but beats HAR significantly on only \DmWinHarIvOne\% of paths. Implied volatility alone is clearly worse (\QlIvOne), because a 30-day index cannot track tomorrow's variance, and GARCH on daily returns lags (\QlGarchOne), as \citet{bergsli2022forecasting} found for BTC.
+  \item At one day, the HAR family is best. HAR-IV is marginally ahead of HAR (median loss ratio \QlHarIvOne) and beats it significantly on only \DmWinHarIvOne\% of paths. Implied volatility alone is clearly worse (\QlIvOne), because a 30-day index cannot track tomorrow's variance, and GARCH on daily returns lags (\QlGarchOne), as \citet{bergsli2022forecasting} found for BTC.
   \item At seven days, the bias-corrected index and HAR-IV tie (\QlIvSeven{} and \QlHarIvSeven{} of HAR's loss).
   \item At 30 days, the index is best (\QlIvThirty) and beats HAR significantly on \DmWinIvThirty\% of paths, never losing (\DmLossIvThirty\%).
 \end{itemize}
@@ -183,11 +183,11 @@ Table~\ref{tab:calib} compares simulated moments with their empirical anchors, a
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{figures/mechanics}
-\caption{Mechanics on the deepest VWAP breakdown of the representative test path. Top: 15-minute close, rolling 24-hour VWAP and the breakdown band (orange dots: trigger bars). Bottom: hedge sizes. The switch hedges late and drops protection as soon as price recovers; the ratchet steps up at the first trigger and decays slowly.}
+\caption{A fresh VWAP breakdown on the representative test path (the first trigger after three quiet days). Top: 15-minute close, rolling 24-hour VWAP and the breakdown band (orange dots: trigger bars). Bottom: hedge sizes. The switch buys protection only once the breakdown is under way and sells it as price recovers, paying a round trip. The selected ratchet barely moves: with a four-day half-life and the 25\% rebalancing band, earlier triggers keep it near its upper level, so in effect it is a larger always-on hedge, which is the size effect identified by the placebo test.}
 \label{fig:mech}
 \end{figure}
 
-\paragraph{Hedging performance.} Table~\ref{tab:hedge} summarises the test results, and Figure~\ref{fig:mech} shows the mechanics on one episode.
+\paragraph{Hedging performance.} Table~\ref{tab:hedge} summarises the test results, and Figure~\ref{fig:mech} shows the rules on one episode.
 \begin{itemize}
   \item \emph{Always-on.} The minimum-variance hedge reduces ES by \EsRedAlways\% and variance by \VarRedAlways\% with a notional of only \NotionalAlways\% of the BTC position. A volatility index is a partial hedge for a long-BTC book: the simulated correlation between daily returns and \BVIV{} changes is \CorrDaily{} (\CorrDown{} on falling and \CorrUp{} on rising bars), and the variance reduction of a minimum-variance hedge is bounded by the squared correlation \citep{ederington1979hedging}.
   \item \emph{VWAP-switch.} The switch is the instructive failure. It trades \TurnSwitch{} times the BTC notional per year, and its ES reduction falls short of the always-on hedge by \DEsSwitch{} pp (95\% CI [\DEsSwitchLo, \DEsSwitchHi]). The gate fires on noise as often as on crashes, and each false alarm costs a round trip.
@@ -195,7 +195,15 @@ Table~\ref{tab:calib} compares simulated moments with their empirical anchors, a
   \item \emph{Oracle.} Holding the hedge only in the latent stress regime reduces ES by just \EsRedOracle\%. Most simulated crash days start from calm, so regime timing without a core hedge leaves the book exposed.
 \end{itemize}
 
-\paragraph{Timing or size? A placebo test.} The ratchet holds more hedge on average than the always-on rule (\NotionalRatchet\% versus \NotionalAlways\% of notional), so its gain could come from size alone. To separate the two, we circularly shift each path's trigger series by 35 to 259 days, in multiples of a week. This keeps the number, clustering and hour-of-week profile of the triggers but breaks their link to the market. The placebo reduces ES by \EsRedPlacebo\%, and the selected ratchet beats it by \DEsPlacebo{} pp (95\% CI [\DEsPlaceboLo, \DEsPlaceboHi]). Across all \PgridN{} ratchet configurations (\PgridPaths{} paths, \PgridShifts{} shifts each), the timing value averages \PgridMean{} pp and ranges from \PgridMin{} to \PgridMax{} pp. \PgridSigPos{} configurations beat their placebo and \PgridSigNeg{} lose to it at the 5\% level. Simply scaling the static hedge by 1.5 achieves the same ES reduction (\EsRedAlwaysOnehalf\% at \CostAlwaysOnehalf\%). In this market, a 15-minute VWAP breakdown carries no information about the next crash beyond what a larger hedge already buys.
+\paragraph{Timing or size? A placebo test.} The ratchet holds more hedge on average than the always-on rule (\NotionalRatchet\% versus \NotionalAlways\% of notional), so its gain could come from size alone. To separate the two, we circularly shift each path's trigger series by 35 to 259 days, in multiples of a week. This keeps the number, clustering and hour-of-week profile of the triggers but breaks their link to the market. For the selected ratchet the placebo is just as good: it reduces ES by \EsRedPlacebo\%, and the ratchet beats it by only \DEsPlacebo{} pp (95\% CI [\DEsPlaceboLo, \DEsPlaceboHi]). Scaling the static hedge by 1.5 achieves the same ES reduction (\EsRedAlwaysOnehalf\% at \CostAlwaysOnehalf\%), although with less variance reduction (\VarRedAlwaysOnehalf\% versus \VarRedRatchet\%).
+
+The grid tells a more nuanced story. Across all \PgridN{} ratchet configurations (\PgridPaths{} paths, \PgridShifts{} shifts each), the timing value averages \PgridMean{} pp, from \PgridMin{} to \PgridMax{} pp. \PgridSigPos{} configurations beat their placebo at the 5\% level and \PgridSigNeg{} lose to it. VWAP breakdowns therefore do carry information about tail days, but its value depends on the core hedge:
+\begin{itemize}
+  \item without a core ($\varphi=0$), timing adds \PgridFloorZero{} pp on average;
+  \item with half a core ($\varphi=0.5$), it adds \PgridFloorHalf{} pp;
+  \item with the full core ($\varphi=1$), it adds \PgridFloorOne{} pp.
+\end{itemize}
+Rules that rely on timing protect less (median ES reduction \PgridEsFloorZero\% without a core, against \PgridEsFloorOne\% with one), and the correlation between a configuration's timing value and its ES reduction is \PgridCorr. The most timing-dependent rule reaches \PgridBestEs\% at a cost of \PgridBestCost\% a year, against \PgridAlwaysEs\% for the always-on hedge on the same paths. Being hedged when the breakdown comes matters more than reacting to it.
 
 \begin{figure}[t]
 \centering
@@ -204,7 +212,7 @@ Table~\ref{tab:calib} compares simulated moments with their empirical anchors, a
 \label{fig:frontier}
 \end{figure}
 
-\paragraph{Sizing.} Figure~\ref{fig:frontier} places every rule in cost-protection space. Along the scaled static hedge, ES reduction peaks between 1$\times$ and 1.5$\times$ and then falls (\EsRedAlwaysTwo\% at 2$\times$, \EsRedAlwaysThree\% at 3$\times$). The extra contracts add volatility-of-volatility risk faster than they add crash convexity. The ratchet configurations scatter around this frontier, and \ShareAboveLadder\% of them lie above it, by margins that the placebo test attributes to size. The economically relevant choice is how much \BVIV{} to hold, not when.
+\paragraph{Sizing.} Figure~\ref{fig:frontier} places every rule in cost-protection space. Along the scaled static hedge, ES reduction peaks between 1$\times$ and 1.5$\times$ and then falls (\EsRedAlwaysTwo\% at 2$\times$, \EsRedAlwaysThree\% at 3$\times$). The extra contracts add volatility-of-volatility risk faster than they add crash convexity. The ratchet configurations scatter around this frontier, and \ShareAboveLadder\% of them lie above it. The best of them do so through a better-shaped size profile, not timing: they buy the ES reduction of a 1.5$\times$ static hedge with more variance reduction and at lower cost. The economically first-order choice is how much \BVIV{} to hold.
 
 \begin{table}[t]
 \centering\small
@@ -215,10 +223,10 @@ Table~\ref{tab:calib} compares simulated moments with their empirical anchors, a
 
 \paragraph{Robustness.} Table~\ref{tab:robust} varies one assumption at a time.
 \begin{itemize}
-  \item \emph{Costs and carry.} Doubling or halving trading costs, or setting the carry to zero or twelve vol points, leaves the ratchet's edge near +0.3 pp, with confidence intervals that touch zero.
-  \item \emph{Spot-vol regime.} The edge shrinks under VIX-like dynamics (\RobVixLikeSpotVol{} pp) and is unchanged under inverse leverage (\RobInverseLeverage{} pp).
-  \item \emph{Crash clustering.} The ratchet \emph{backfires} when crashes cluster in the stress regime (\RobCrashesClusterInStress{} pp, CI [\RobLoCrashesClusterInStress, \RobHiCrashesClusterInStress]). Its larger post-breakdown position then exposes the book to volatility crushes. On the hedged book's own worst days, the ratchet's hedge leg returns \DiagClusterRatchet\% of notional, against \DiagClusterAlways\% for the always-on hedge (baseline: \DiagBaseRatchet\% and \DiagBaseAlways\%). This mirrors the equity lesson that badly timed protection can deepen losses \citep{israelov2019pathetic}.
-  \item \emph{VWAP anchor and book.} A UTC-session anchor gives \RobSessionAnchoredVwap{} pp. Hedging a perpetual instead of spot changes little (\RobPerpetualBtcBook{} pp): BTC funding shifts the book's mean return but not its tail co-movement with \BVIV{}.
+  \item \emph{Costs and carry.} Doubling or halving trading costs, or setting the carry to zero or twelve vol points, leaves the ratchet's edge over the always-on hedge at about +0.6 pp and significant.
+  \item \emph{Spot-vol regime.} The edge holds under VIX-like dynamics (\RobVixLikeSpotVol{} pp) but shrinks to \RobInverseLeverage{} pp under inverse leverage (CI [\RobLoInverseLeverage, \RobHiInverseLeverage]). Here rallies lift \BVIV{}, and a hedge sized on falling bars covers less of what moves the index.
+  \item \emph{Crash clustering.} When crashes cluster in the stress regime, the edge halves and loses significance (\RobCrashesClusterInStress{} pp, CI [\RobLoCrashesClusterInStress, \RobHiCrashesClusterInStress]). The larger post-breakdown position then also exposes the book to volatility crushes. On the hedged book's own worst days, the ratchet's hedge leg returns \DiagClusterRatchet\% of notional, against \DiagClusterAlways\% for the always-on hedge (baseline: \DiagBaseRatchet\% and \DiagBaseAlways\%). This echoes the equity lesson that badly timed protection can deepen losses \citep{israelov2019pathetic}.
+  \item \emph{VWAP anchor and book.} A UTC-session anchor gives \RobSessionAnchoredVwap{} pp. Hedging a perpetual instead of spot gives \RobPerpetualBtcBook{} pp: BTC funding shifts the book's mean return but not its tail co-movement with \BVIV{}.
 \end{itemize}
 
 \section{Implementation on live data}\label{sec:impl}
@@ -231,11 +239,18 @@ The pipeline (\texttt{scripts/run\_paper.py --live}) maps live data into the sim
 \end{itemize}
 Four practical issues deserve attention. First, the \BVIV{} perpetuals are young and thin, so the costs in Table~\ref{tab:robust} should be stressed further for large books. Second, oracle risk is real on builder-deployed markets: in July 2026 a single erroneous pre-market print triggered large liquidations on another Hyperliquid HIP-3 perpetual. Third, venue mechanics differ: Bitfinex warns that its funding process can briefly pause trading, so a hedge should not depend on a single venue at the moment of a crash. Fourth, the 15-minute boundary itself attracts algorithmic order flow \citep{kim2026quarter}, so hedge orders should be worked inside the bar, for example by VWAP slicing \citep{berkowitz1988total,konishi2002optimal,bialkowski2008improving}, and not sent at the bar close \citep{madhavan2002vwap}.
 
-\paragraph{Limitations.} The evidence is simulation-based. The simulator links VWAP breakdowns to crashes only through regime drift and volatility clustering. Real liquidation cascades may make intraday breakdowns more informative, for instance through intraday momentum \citep{shen2022bitcoin}, or less. Our negative timing result is therefore a statement about this calibrated market, not a theorem. On live data, the placebo test of Section~\ref{sec:results} is the decisive check, and the pipeline runs it unchanged. The forecasting comparison is cleaner on real data too, because in the simulation the index is by construction a near-rational forecast; its ranking nevertheless matches the empirical literature \citep{hoang2020forecasting,bergsli2022forecasting}.
+\paragraph{Limitations.} The evidence is simulation-based. The simulator links VWAP breakdowns to crashes only through regime drift and volatility clustering. Real liquidation cascades may make intraday breakdowns more informative, for instance through intraday momentum \citep{shen2022bitcoin}, or less. Our finding that a core hedge makes timing redundant is therefore a statement about this calibrated market, not a theorem. On live data, the placebo test of Section~\ref{sec:results} is the decisive check, and the pipeline runs it unchanged. The forecasting comparison is cleaner on real data too, because in the simulation the index is by construction a near-rational forecast; its ranking nevertheless matches the empirical literature \citep{hoang2020forecasting,bergsli2022forecasting}.
 
 \section{Conclusion}\label{sec:conclusion}
 
-\BVIV{} perpetuals turn BTC implied volatility into a hedging instrument, but a partial and costly one. Three practical lessons follow. First, forecast BTC volatility with HAR-type models at short horizons and with the implied index beyond a week; HAR augmented with implied variance is the robust default. Second, size a \BVIV{} hedge with the minimum-variance ratio, or up to about 1.5 times it if the aim is expected shortfall rather than variance, and keep it on. Third, do not switch the hedge around VWAP, because turnover eats the protection. Any intraday timing rule should beat a placebo with the same trigger statistics before it earns its complexity. In our calibrated market, the 15-minute VWAP ratchet does not.
+\BVIV{} perpetuals turn BTC implied volatility into a hedging instrument, but a partial and costly one. Four practical lessons follow.
+\begin{enumerate}
+  \item Forecast BTC volatility with HAR-type models at short horizons and with the implied index beyond a week; HAR augmented with implied variance is the robust default.
+  \item Size a \BVIV{} hedge with the minimum-variance ratio, or up to about 1.5 times it if the aim is expected shortfall rather than variance, and keep it on.
+  \item Do not switch the hedge around VWAP, because turnover eats the protection.
+  \item Treat a 15-minute VWAP breakdown as information that is real but secondary. It helps a hedge that would otherwise be absent, but once a core hedge is held, a ratchet's gain is size, not timing.
+\end{enumerate}
+Any intraday timing rule should beat a placebo with the same trigger statistics before it earns its complexity.
 
 \section*{References}
 \renewcommand{\bibsection}{}

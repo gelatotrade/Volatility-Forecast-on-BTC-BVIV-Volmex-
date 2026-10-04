@@ -132,9 +132,19 @@ def placebo_grid_summary(grid: pd.DataFrame) -> dict[str, float]:
         d = pd.DataFrame({"seed": w.index, "strategy": "diff", "es_red": (w[c] - fake).to_numpy()})
         st = paired(pd.concat([d, d.assign(strategy="zero", es_red=0.0)]), "es_red", "diff", "zero")
         rows.append(st)
-    t = pd.DataFrame(rows)
+    t = pd.DataFrame(rows, index=real)
+    t["floor"] = [float(c.split("|")[3]) for c in real]
+    t["es"] = w[real].median()
+    t["cost"] = grid.pivot(index="seed", columns="strategy", values="hedge_cost")[real].median()
+    best = t["mean"].idxmax()
+    by_floor = t.groupby("floor")["mean"].mean()
     return {"n": len(t), "mean": float(t["mean"].mean()), "min": float(t["mean"].min()), "max": float(t["mean"].max()),
-            "sig_pos": int((t["lo"] > 0).sum()), "sig_neg": int((t["hi"] < 0).sum())}
+            "sig_pos": int((t["lo"] > 0).sum()), "sig_neg": int((t["hi"] < 0).sum()),
+            "floor_zero": float(by_floor[0.0]), "floor_half": float(by_floor[0.5]), "floor_one": float(by_floor[1.0]),
+            "es_floor_zero": float(t.loc[t["floor"] == 0.0, "es"].mean()), "es_floor_one": float(t.loc[t["floor"] == 1.0, "es"].mean()),
+            "best_es": float(t.loc[best, "es"]), "best_cost": float(t.loc[best, "cost"]),
+            "corr": float(np.corrcoef(t["mean"], t["es"])[0, 1]),
+            "always_es": float(w["always|1"].median())}
 
 
 def placebo_summary(placebo: pd.DataFrame, ratchet_key: str) -> dict[str, float]:
@@ -179,8 +189,8 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
     market = simulate_market(params, 0)
     out = analyse(market.bars, cfg, final_rules(selection), Protocol(full_forecasts=False))
     plots.fig_market(market.bars, fig_dir / "market.pdf")
-    episode = plots.pick_episode(out["signals"], out["hedge_start"])
     z_enter = rule_from_key(rt).z_enter
+    episode = plots.pick_episode(out["signals"], out["hedge_start"], z_enter)
     plots.fig_mechanics(market.bars, out["signals"], out["results"], episode, z_enter,
                         {"always|1": "Always-on", sw: "VWAP-switch", rt: "VWAP-ratchet"}, fig_dir / "mechanics.pdf")
     med_all = summarise_metrics(test)
@@ -273,6 +283,11 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         "pgrid_n": f"{pgrid['n']}", "pgrid_mean": f"{pgrid['mean']:+.2f}", "pgrid_min": f"{pgrid['min']:+.2f}",
         "pgrid_max": f"{pgrid['max']:+.2f}", "pgrid_sig_pos": f"{pgrid['sig_pos']}", "pgrid_sig_neg": f"{pgrid['sig_neg']}",
         "pgrid_paths": f"{GRID_PATHS}", "pgrid_shifts": f"{len(GRID_SHIFTS)}",
+        "pgrid_floor_zero": f"{pgrid['floor_zero']:+.2f}", "pgrid_floor_half": f"{pgrid['floor_half']:+.2f}",
+        "pgrid_floor_one": f"{pgrid['floor_one']:+.2f}", "pgrid_es_floor_zero": pgrid["es_floor_zero"],
+        "pgrid_es_floor_one": pgrid["es_floor_one"], "pgrid_best_es": pgrid["best_es"],
+        "pgrid_best_cost": f"{pgrid['best_cost']:.1f}", "pgrid_corr": f"{pgrid['corr']:.2f}",
+        "pgrid_always_es": pgrid["always_es"],
     }
     for r in robust.to_dict("records"):
         key = "rob." + r["scenario"].lower().replace("x0.5", "half").replace("x2", "double").replace(" 0", " zero").replace(" 12", " twelve")
