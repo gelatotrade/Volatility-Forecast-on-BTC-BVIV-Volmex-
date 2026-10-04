@@ -79,7 +79,7 @@ def stylised_facts(bars: pd.DataFrame, daily: pd.DataFrame) -> dict:
 def perp_facts(panel: dict) -> dict:
     bars, status, start = panel["bars"], panel["status"], panel["perp_start"]
     live_bars = bars.loc[start:]
-    premium = (live_bars["bviv_trade_price"] / live_bars["bviv_mark"] - 1).dropna()
+    premium = (live_bars["bviv_mid"] / live_bars["bviv_mark"] - 1).dropna()
     candles = data.parse_bitfinex_candles(data._get(
         f"https://api-pub.bitfinex.com/v2/candles/trade:1D:{live.BVIV_PERP}/hist?limit=10000&sort=1"))
     days = pd.date_range(start.floor("1D"), live_bars.index[-1].floor("1D"), freq="D")
@@ -95,6 +95,28 @@ def perp_facts(panel: dict) -> dict:
         "mean_premium_pct": float(100 * premium.mean()), "share_premium_positive": float(100 * (premium > 0).mean()),
         "mark_vs_volmex_pct_median": float(100 * index_gap.median()), "mark_vs_volmex_pct_p95": float(100 * index_gap.abs().quantile(0.95)),
     }
+
+
+def book_facts(contracts_per_btc: float) -> dict:
+    """Depth of the perpetual's order book from one dated snapshot (cached: the book has no public history)."""
+    path = OUT / "book_snapshot.json"
+    if not path.exists():
+        snap = {"time": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds"),
+                "book": json.loads(data._get(f"https://api-pub.bitfinex.com/v2/book/{live.BVIV_PERP}/P0?len=25"))}
+        path.write_text(json.dumps(snap))
+    snap = json.loads(path.read_text())
+    book = np.array(snap["book"], dtype=float)                     # [price, count, amount]; asks have amount < 0
+    bids, asks = book[book[:, 2] > 0], book[book[:, 2] < 0]
+    asks = asks[np.argsort(asks[:, 0])]
+    bid, ask = bids[:, 0].max(), asks[:, 0].min()
+    mid = (bid + ask) / 2
+    near = asks[asks[:, 0] <= mid * 1.025]
+    walk = np.minimum(np.cumsum(-asks[:, 2]), contracts_per_btc)   # buy one BTC's hedge by walking the asks
+    fill = np.diff(np.r_[0.0, walk]) @ asks[:, 0] / contracts_per_btc
+    return {"time": snap["time"][:10], "mid": float(mid), "spread_pct": float(100 * (ask - bid) / mid),
+            "best_ask_contracts": float(-asks[0, 2]), "best_ask_pct": float(100 * (ask / mid - 1)),
+            "ask_contracts_2_5pct": float(-near[:, 2].sum()), "btc_capacity_2_5pct": float(-near[:, 2].sum() / contracts_per_btc),
+            "fill_cost_one_btc_pct": float(100 * (fill / mid - 1))}
 
 
 # --------------------------------------------------------------------------- hedging
@@ -187,21 +209,55 @@ def main():
     # ---- sensitivities (frozen rules)
     sens = {}
     base_rules = rules[:5]
-    for label, c, b in (("no trading costs", cfg.with_(fee_bps=0, slippage_bps=0), bars),
+    for label, c, b in (("execution 1 bar later", cfg.with_(exec_delay=1), bars),
+                        ("execution 1 hour later", cfg.with_(exec_delay=4), bars),
+                        ("execution 1 day later", cfg.with_(exec_delay=96), bars),
+                        ("no trading costs", cfg.with_(fee_bps=0, slippage_bps=0), bars),
                         ("trading costs x2", cfg.with_(fee_bps=2 * args.fee, slippage_bps=2 * args.slippage), bars),
                         ("funding ignored", cfg, bars.assign(bviv_funding=0.0, bviv_carry=0.0)),
-                        ("fills at index (no premium)", cfg, bars.drop(columns="bviv_trade_price")),
+                        ("fills at mark (no premium)", cfg, bars.drop(columns="bviv_mid")),
                         ("perpetual BTC book", cfg.with_(instrument="perp"), bars)):
         res, _ = run_rules(b, c, base_rules, signals=build_signals(b, c, out["forecasts"][30]["HAR-IV"]))
         bk = {k: daily_book(v).loc[start:] for k, v in res.items()}
         sens[label] = {k: book_metrics(v, bk["Unhedged"]) for k, v in bk.items() if k != "Unhedged"}
     (OUT / "sensitivity.json").write_text(json.dumps(sens, indent=2))
 
+    # ---- capacity: hedge contracts for a 1-BTC book against the perpetual's open interest
+    pos = out["results"]["always|1"]["position"].loc[start:]
+    oi = bars["open_interest"].loc[start:]
+    held = pos > 0
+    facts["capacity"] = {"median_contracts_per_btc": float(pos[held].median()),
+                         "median_oi": float(oi.median()),
+                         "share_bars_position_above_oi": float(100 * (pos[held] > oi[held]).mean()),
+                         "max_notional_pct": float(100 * (out["results"]["always|1"]["notional"] /
+                                                          out["results"]["always|1"]["btc_notional"]).loc[start:].max())}
+    facts["book"] = book_facts(facts["capacity"]["median_contracts_per_btc"])
+    hedge = books["always|1"]["hedge"]
+    worst = books["Unhedged"]["total"].nsmallest(10).index
+    facts["concentration"] = {"hedge_total_pct": float(100 * hedge.sum()), "top10_pct": float(100 * hedge.nlargest(10).sum()),
+                              "ex_top10_pct": float(100 * (hedge.sum() - hedge.nlargest(10).sum())),
+                              "worst10_btc_pct": float(100 * books["always|1"]["btc"].loc[worst].sum()),
+                              "worst10_hedge_pct": float(100 * hedge.loc[worst].sum()),
+                              "best_day": str(hedge.idxmax().date()), "best_day_pct": float(100 * hedge.max())}
+
+    # ---- the best hedge day at 15-minute resolution (episode figure)
+    day = pd.Timestamp(facts["concentration"]["best_day"], tz="UTC")
+    win = slice(day - pd.Timedelta(days=2), day + pd.Timedelta(days=3) - pd.Timedelta(minutes=15))
+    sig = out["signals"].loc[win]
+    episode = pd.DataFrame({
+        "close": bars["close"].loc[win], "vwap": sig["vwap"],
+        "band": sig["vwap"] * np.exp(base_rt.z_enter * sig["sigma_day"] / np.sqrt(3.0)), "z": sig["z"],
+        "bviv": bars["bviv"].loc[win], "bviv_mark": bars["bviv_mark"].loc[win], "bviv_mid": bars["bviv_mid"].loc[win],
+    })
+    for k in ("always|1", sw, rt):
+        episode[f"{k}|position"] = out["results"][k]["position"].loc[win]
+    episode.to_csv(OUT / "episode.csv")
+
     # ---- daily series for figures
     daily_out = pd.DataFrame({
         "btc": bars["close"].resample("1D").last(), "bviv": bars["bviv"].resample("1D").last(),
         "bviv_mark": bars["bviv_mark"].resample("1D").last(),
-        "premium_pct": (100 * (bars["bviv_trade_price"] / bars["bviv_mark"] - 1)).resample("1D").mean(),
+        "premium_pct": (100 * (bars["bviv_mid"] / bars["bviv_mark"] - 1)).resample("1D").mean(),
     })
     ev = panel["events"].loc[perp_start:]
     daily_out["funding_8h_mean"] = ev["rate"].resample("1D").mean()

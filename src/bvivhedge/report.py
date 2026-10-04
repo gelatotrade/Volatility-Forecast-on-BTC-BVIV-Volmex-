@@ -36,41 +36,6 @@ def write_numbers(values: dict[str, str | float], path: str | Path, nd: int = 1)
     Path(path).write_text("\n".join(lines) + "\n")
 
 
-def table_calibration(calib: pd.DataFrame, targets: list[tuple[str, str, str, int]], path: str | Path):
-    """Simulated moments (median and 5-95% range across paths) next to their empirical anchors."""
-    rows = []
-    for col, label, anchor, nd in targets:
-        q = calib[col].quantile([0.05, 0.5, 0.95])
-        rows.append(f"{label} & {_fmt(q[0.5], nd)} & [{_fmt(q[0.05], nd)}, {_fmt(q[0.95], nd)}] & {anchor} \\\\")
-    body = "\n".join(rows)
-    Path(path).write_text(
-        "\\begin{tabular}{@{}lrcl@{}}\n\\toprule\n"
-        "Moment & Median & 5--95\\% & Empirical anchor \\\\\n\\midrule\n"
-        f"{body}\n\\bottomrule\n\\end{{tabular}}\n")
-
-
-def table_forecasts(summary: pd.DataFrame, path: str | Path):
-    hs = sorted(summary["h"].unique())
-    models = list(dict.fromkeys(summary["model"]))
-    head = " & ".join([f"\\multicolumn{{3}}{{c}}{{$h={h}$ day{'s' if h > 1 else ''}}}" for h in hs])
-    cmid = " ".join([f"\\cmidrule(lr){{{2 + 3 * i}-{4 + 3 * i}}}" for i in range(len(hs))])
-    sub = " & ".join(["QL ratio & MZ $R^2$ & DM win" for _ in hs])
-    rows = []
-    for m in models:
-        cells = []
-        for h in hs:
-            r = summary[(summary.h == h) & (summary.model == m)].iloc[0]
-            best = summary[summary.h == h]["qlike_ratio"].min()
-            ql = _fmt(r["qlike_ratio"], 2)
-            ql = f"\\textbf{{{ql}}}" if np.isclose(r["qlike_ratio"], best) else ql
-            win = "--" if m == "HAR" else f"{r['dm_win']:.0f}\\%"
-            cells += [ql, _fmt(r["mz_r2"], 2), win]
-        rows.append(f"{m} & " + " & ".join(cells) + " \\\\")
-    Path(path).write_text(
-        f"\\begin{{tabular}}{{@{{}}l{'rrr' * len(hs)}@{{}}}}\n\\toprule\n & {head} \\\\\n{cmid}\n"
-        f"Model & {sub} \\\\\n\\midrule\n" + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n")
-
-
 def table_hedging(med: pd.DataFrame, order: list[tuple[str, str]], cols: list[tuple[str, str, int]], path: str | Path):
     """Strategies as rows, metrics as columns (medians across test paths)."""
     head = " & ".join(c[1] for c in cols)
@@ -85,7 +50,8 @@ def table_hedging(med: pd.DataFrame, order: list[tuple[str, str]], cols: list[tu
 
 def table_robustness(rows: list[dict], path: str | Path):
     labels = {"Trading costs x2": "Trading costs $\\times$2", "Trading costs x0.5": "Trading costs $\\times$0.5",
-              "Funding carry 0": "Carry 0 vol pts", "Funding carry 12": "Carry 12 vol pts"}
+              "Funding carry 0": "Carry 0 vol pts", "Funding carry 12": "Carry 12 vol pts",
+              "Funding carry 24": "Carry 24 vol pts (live avg.)"}
     body = []
     for r in rows:
         body.append(
@@ -97,4 +63,57 @@ def table_robustness(rows: list[dict], path: str | Path):
         " & \\multicolumn{2}{c}{ES red. (\\%)} & Ratchet $-$ Always & & Switch & \\multicolumn{2}{c}{Cost (\\% p.a.)} \\\\\n"
         "\\cmidrule(lr){2-3}\\cmidrule(lr){7-8}\n"
         "Scenario & Always & Ratchet & mean [95\\% CI] & $>0$ & ES red. & Always & Ratchet \\\\\n\\midrule\n"
+        + "\n".join(body) + "\n\\bottomrule\n\\end{tabular}\n")
+
+
+# --------------------------------------------------------------------------- live data
+def table_live_forecasts(evals: pd.DataFrame, path: str | Path):
+    """Single path: QLIKE ratio to HAR, Mincer-Zarnowitz R^2 and the Diebold-Mariano t-statistic vs HAR."""
+    hs = sorted(evals["h"].unique())
+    models = [m for m in ("RW", "EWMA", "GARCH", "HAR", "IV-raw", "IV", "HAR-IV") if m in set(evals["model"])]
+    head = " & ".join([f"\\multicolumn{{3}}{{c}}{{$h={h}$ day{'s' if h > 1 else ''}}}" for h in hs])
+    cmid = " ".join([f"\\cmidrule(lr){{{2 + 3 * i}-{4 + 3 * i}}}" for i in range(len(hs))])
+    sub = " & ".join(["QL ratio & MZ $R^2$ & DM $t$" for _ in hs])
+    rows = []
+    for m in models:
+        cells = []
+        for h in hs:
+            e = evals[evals.h == h].set_index("model")
+            ratio = e.loc[m, "qlike"] / e.loc["HAR", "qlike"]
+            best = (e["qlike"] / e.loc["HAR", "qlike"]).min()
+            ql = _fmt(ratio, 2)
+            ql = f"\\textbf{{{ql}}}" if np.isclose(ratio, best) else ql
+            dm = "--" if m == "HAR" else _fmt(e.loc[m, "dm_vs_HAR"], 2)
+            cells += [ql, _fmt(e.loc[m, "mz_r2"], 2), dm]
+        rows.append(f"{m} & " + " & ".join(cells) + " \\\\")
+    Path(path).write_text(
+        f"\\begin{{tabular}}{{@{{}}l{'rrr' * len(hs)}@{{}}}}\n\\toprule\n & {head} \\\\\n{cmid}\n"
+        f"Model & {sub} \\\\\n\\midrule\n" + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n")
+
+
+def table_live_vs_sim(live: dict, sim: pd.DataFrame, rows: list[tuple[str, str, str, int]], path: str | Path):
+    """Stylised facts: live sample (full and by year) next to the simulation's median."""
+    years = list(live["by_year"].keys())
+    head = " & ".join(["Live"] + years + ["Sim."])
+    body = []
+    for key, label, year_key, nd in rows:
+        cells = [_fmt(live[key], nd)]
+        cells += [_fmt(live["by_year"][y][year_key], nd) if year_key else "" for y in years]
+        cells += [_fmt(sim[key].median(), nd) if key in sim else "--"]
+        body.append(f"{label} & " + " & ".join(cells) + " \\\\")
+    Path(path).write_text(
+        f"\\begin{{tabular}}{{@{{}}l{'r' * (len(years) + 2)}@{{}}}}\n\\toprule\nMoment & {head} \\\\\n\\midrule\n"
+        + "\n".join(body) + "\n\\bottomrule\n\\end{tabular}\n")
+
+
+def table_live_sensitivity(sens: dict, rules: list[tuple[str, str]], path: str | Path):
+    """ES reduction (and hedge-leg P&L) of the frozen rules under live-data perturbations."""
+    head = " & ".join(label for _, label in rules)
+    body = []
+    for scen, d in sens.items():
+        cells = [f"{_fmt(d[k]['es_red'])} ({_fmt(d[k]['hedge_pnl'], 1, True)})" for k, _ in rules]
+        label = scen[0].upper() + scen[1:].replace(" x2", " $\\times$2")
+        body.append(f"{label} & " + " & ".join(cells) + " \\\\")
+    Path(path).write_text(
+        f"\\begin{{tabular}}{{@{{}}l{'r' * len(rules)}@{{}}}}\n\\toprule\nVariant & {head} \\\\\n\\midrule\n"
         + "\n".join(body) + "\n\\bottomrule\n\\end{tabular}\n")

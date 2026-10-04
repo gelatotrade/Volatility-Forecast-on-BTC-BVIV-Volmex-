@@ -5,7 +5,7 @@ Panel conventions (same schema as the simulator, so every module is shared):
 * bars are indexed by their open time; ``close`` is the BTC price at open + 15 minutes;
 * ``bviv`` is the official Volmex index (signals and forecasts);
 * ``bviv_mark`` is the Bitfinex mark price of the BVIV perpetual (index x USD/USDt) once it trades,
-  the Volmex index before; ``bviv_trade_price`` is the perpetual's own price (fills pay the premium);
+  the Volmex index before; ``bviv_mid`` is the perpetual's order-book mid (fills pay its premium over the mark);
 * ``bviv_funding[t]`` is the funding a long contract pays over bar t+1 -- the Bitfinex settlement
   at 00/08/16 UTC, rate x mark, booked on the bar whose holding period ends at the settlement;
 * ``bviv_carry`` equals the funding: on live data all funding is a cost of the hedge.
@@ -64,7 +64,7 @@ def build_panel(start: str = "2023-01-01", end: str = "2026-10-04", perp_start: 
     live = bars.index >= first_trade
     bars["bviv_mark"] = np.where(live, st["mark"], bars["bviv"])
     bars["bviv_mark"] = pd.Series(bars["bviv_mark"], index=bars.index).fillna(bars["bviv"])
-    bars["bviv_trade_price"] = np.where(live, st["deriv_price"], bars["bviv_mark"])
+    bars["bviv_mid"] = np.where(live, st["deriv_price"], bars["bviv_mark"])
     bars["open_interest"] = st["open_interest"]
     bars["bviv_funding"] = funding_per_bar(events, bars.index).where(live, 0.0)
     bars["bviv_carry"] = bars["bviv_funding"]

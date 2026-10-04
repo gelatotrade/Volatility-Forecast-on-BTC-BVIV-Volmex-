@@ -46,6 +46,7 @@ class HedgeConfig:
     max_notional_frac: float = 0.5      # cap: hedge notional <= 50% of BTC notional
     warmup_days: int = 30               # no hedging before estimators have data
     cheapness_lookback_days: int = 180
+    exec_delay: int = 0                 # bars between decision and execution (live-data realism)
 
     def with_(self, **changes) -> "HedgeConfig":
         return replace(self, **changes)
@@ -227,9 +228,9 @@ def backtest(bars: pd.DataFrame, position: np.ndarray, cfg: HedgeConfig) -> pd.D
     traded = np.abs(change)
     cost = traded * mark * (cfg.fee_bps + cfg.slippage_bps) / 1e4
     basis = np.zeros(len(bars))
-    if "bviv_trade_price" in bars:
-        # live data: fills at the perpetual's price, marks at the index -- buying at a premium is a cost
-        basis = np.nan_to_num(change * (bars["bviv_trade_price"].to_numpy() - mark))
+    if "bviv_mid" in bars:
+        # live data: fills at the perpetual's mid, marks at the index -- buying at a premium is a cost
+        basis = np.nan_to_num(change * (bars["bviv_mid"].to_numpy() - mark))
     return pd.DataFrame(
         {"btc": btc, "hedge": hedge, "funding": funding, "carry": carry, "cost": cost + basis, "basis": basis,
          "position": position, "notional": position * mark, "traded_notional": traded * mark,
@@ -248,5 +249,8 @@ def run_rules(bars: pd.DataFrame, cfg: HedgeConfig, rules=DEFAULT_RULES,
         if rule.kind == "oracle" and "regime" not in bars:
             continue
         target, switch = target_hedge(bars, sig, rule, cfg)
-        results[rule.name] = backtest(bars, apply_rebalance_band(target, switch, cfg.rebalance_band), cfg)
+        position = apply_rebalance_band(target, switch, cfg.rebalance_band)
+        if cfg.exec_delay:
+            position = np.r_[np.zeros(cfg.exec_delay), position[:-cfg.exec_delay]]
+        results[rule.name] = backtest(bars, position, cfg)
     return results, sig

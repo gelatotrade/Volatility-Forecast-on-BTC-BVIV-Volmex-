@@ -43,7 +43,7 @@ def test_funding_is_charged_to_the_position_held_at_settlement():
 
 def test_basis_cost_on_fills():
     idx = pd.date_range("2025-01-01", periods=4, freq="15min", tz="UTC")
-    bars = pd.DataFrame({"close": 1.0, "bviv_mark": 50.0, "bviv_trade_price": 50.5, "bviv_funding": 0.0,
+    bars = pd.DataFrame({"close": 1.0, "bviv_mark": 50.0, "bviv_mid": 50.5, "bviv_funding": 0.0,
                          "bviv_carry": 0.0}, index=idx)
     pnl = backtest(bars, np.array([0.0, 2.0, 2.0, 0.0]), HedgeConfig(fee_bps=0, slippage_bps=0))
     assert np.isclose(pnl["basis"].sum(), 2 * 0.5 - 2 * 0.5)          # buy at a premium, sell at the same premium

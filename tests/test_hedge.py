@@ -68,6 +68,13 @@ def test_rules_run_and_unhedged_is_zero(bars):
     assert (results["Ratchet"]["position"] >= 0).all()
 
 
+def test_execution_delay_shifts_positions(bars):
+    rules = (Rule("Unhedged", "unhedged"), Rule("Always-on", "always"))
+    now, _ = run_rules(bars, HedgeConfig(), rules)
+    late, _ = run_rules(bars, HedgeConfig(exec_delay=4), rules)
+    assert np.allclose(late["Always-on"]["position"].to_numpy()[4:], now["Always-on"]["position"].to_numpy()[:-4])
+
+
 def test_placebo_preserves_trigger_count(bars):
     from bvivhedge.hedge import target_hedge
     cfg = HedgeConfig()
