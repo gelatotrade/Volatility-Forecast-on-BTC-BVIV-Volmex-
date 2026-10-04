@@ -2,8 +2,9 @@
 
 The book is long ``qty`` BTC (spot, or a perpetual that additionally pays
 funding).  The hedge is a long position of ``H`` BVIV-perpetual contracts, each
-paying one dollar per index point.  A position decided at the close of bar *t*
-is held over bar *t+1*; trades pay fees and slippage on traded notional.
+paying one dollar per index point.  A position executed at the close of bar *t*
+(decided ``exec_delay`` bars earlier) is held over bar *t+1*; trades pay fees and
+slippage on traded notional.
 
 Four rule families are compared:
 
@@ -49,6 +50,7 @@ class HedgeConfig:
     exec_delay: int = 0                 # bars between decision and execution (live-data realism)
     placebo_start_days: int | None = None  # placebo shifts are circular from this day on (default: warm-up end),
                                            # so the evaluation window keeps the real number of triggers
+    warmup_bars: int | None = None      # no hedging before this bar (default: warm-up days), e.g. a listing time
 
     def with_(self, **changes) -> "HedgeConfig":
         return replace(self, **changes)
@@ -164,14 +166,16 @@ def build_signals(bars: pd.DataFrame, cfg: HedgeConfig, daily_rv_forecast: pd.Se
 def ratchet_trigger(z: np.ndarray, rule: Rule, cfg: HedgeConfig) -> np.ndarray:
     """Breakdown bars of a ratchet; for a placebo, the same series circularly shifted.
 
-    The shift is circular within the evaluated segment (from ``placebo_start_days``), so the placebo
-    keeps the number, clustering and hour-of-week profile of the real triggers there and only their
-    link to the market is broken.
+    The shift is circular within the whole weeks of the evaluated segment (from ``placebo_start_days``),
+    so the placebo keeps the number, clustering and hour-of-week profile of the real triggers there and
+    only their link to the market is broken.  The last (length mod 7) days keep their real triggers.
     """
     trigger = np.nan_to_num(z, nan=0.0) < rule.z_enter
     if rule.placebo_shift_days:
         i0 = (cfg.warmup_days if cfg.placebo_start_days is None else cfg.placebo_start_days) * BARS_PER_DAY
-        trigger[i0:] = np.roll(trigger[i0:], int(rule.placebo_shift_days * BARS_PER_DAY))
+        week = 7 * BARS_PER_DAY
+        i1 = i0 + (len(trigger) - i0) // week * week          # whole weeks: a wrapped trigger keeps its weekday
+        trigger[i0:i1] = np.roll(trigger[i0:i1], int(rule.placebo_shift_days * BARS_PER_DAY))
     return trigger
 
 
@@ -203,7 +207,7 @@ def target_hedge(bars: pd.DataFrame, sig: pd.DataFrame, rule: Rule, cfg: HedgeCo
     else:
         raise ValueError(f"unknown rule kind {rule.kind!r}")
     h = np.minimum(rule.scale * h, sig["cap"].to_numpy())
-    h[: cfg.warmup_days * BARS_PER_DAY] = 0.0
+    h[: cfg.warmup_days * BARS_PER_DAY if cfg.warmup_bars is None else cfg.warmup_bars] = 0.0
     return h, switch
 
 
@@ -223,8 +227,8 @@ def apply_rebalance_band(target: np.ndarray, switch: np.ndarray, band: float) ->
 def backtest(bars: pd.DataFrame, position: np.ndarray, cfg: HedgeConfig) -> pd.DataFrame:
     """Bar P&L in USD of the BTC leg, the hedge leg and trading costs.
 
-    ``position[t]`` contracts are decided at the close of bar t; they earn the
-    mark change and pay the funding of bar t+1.
+    ``position[t]`` contracts are held from the close of bar t (already shifted by
+    ``exec_delay``); they earn the mark change and pay the funding of bar t+1.
     """
     s = bars["close"].to_numpy()
     mark = bars["bviv_mark"].to_numpy()

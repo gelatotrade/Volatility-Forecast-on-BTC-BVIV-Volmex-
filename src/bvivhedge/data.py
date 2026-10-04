@@ -227,8 +227,9 @@ def fetch_bitfinex_status(symbol: str, start: str, end: str, pause: float = 0.7)
     for month in pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M"):
         m0 = max(month.start_time.tz_localize("UTC"), pd.Timestamp(start, tz="UTC"))
         m1 = min((month + 1).start_time.tz_localize("UTC"), pd.Timestamp(end, tz="UTC"))
+        head = "" if m0 == month.start_time.tz_localize("UTC") else f"_from_{m0:%Y-%m-%d}"
         partial = "" if m1 == (month + 1).start_time.tz_localize("UTC") else f"_to_{m1:%Y-%m-%d}"
-        path = RAW / f"bitfinex_status_{symbol.replace(':', '_')}_{month}{partial}.csv.gz"
+        path = RAW / f"bitfinex_status_{symbol.replace(':', '_')}_{month}{head}{partial}.csv.gz"
         complete = m1 <= pd.Timestamp.now(tz="UTC")             # the window has ended: its history is final
         if path.exists():
             parts.append(pd.read_csv(path, index_col=0, parse_dates=True))

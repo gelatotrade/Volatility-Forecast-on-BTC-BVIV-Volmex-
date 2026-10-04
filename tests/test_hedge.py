@@ -88,3 +88,22 @@ def test_placebo_preserves_trigger_count(bars):
     assert (t_real[:i0] == t_fake[:i0]).all()                        # nothing leaks in from the warm-up
     assert not (t_real[i0:] == t_fake[i0:]).all()
     assert not np.allclose(target_hedge(bars, sig, real, cfg)[0], target_hedge(bars, sig, fake, cfg)[0])
+
+
+def test_weekly_placebo_keeps_hour_of_week_profile(bars):
+    from bvivhedge.hedge import ratchet_trigger
+    cfg = HedgeConfig(placebo_start_days=40)
+    z = build_signals(bars, cfg)["z"].to_numpy()
+    real = Rule("r", "ratchet", z_enter=-1.0, halflife_days=1.0)
+    fake = Rule("p", "ratchet", z_enter=-1.0, halflife_days=1.0, placebo_shift_days=14.0)
+    t_real, t_fake = ratchet_trigger(z, real, cfg), ratchet_trigger(z, fake, cfg)
+    how = np.arange(len(z)) % (7 * BARS_PER_DAY)                    # bar of the week, relative to the start
+    assert np.array_equal(np.bincount(how[t_real], minlength=7 * 96), np.bincount(how[t_fake], minlength=7 * 96))
+
+
+def test_warmup_bars_blocks_hedging_before_listing(bars):
+    from bvivhedge.hedge import target_hedge
+    sig = build_signals(bars, HedgeConfig())
+    cfg = HedgeConfig(warmup_bars=45 * 96 + 36)
+    h, _ = target_hedge(bars, sig, Rule("Always-on", "always"), cfg)
+    assert (h[: 45 * 96 + 36] == 0).all() and (h[45 * 96 + 36:] > 0).any()

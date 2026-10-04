@@ -91,12 +91,12 @@ def table_live_vs_sim(live: dict, sim: pd.DataFrame, rows: list[tuple[str, str, 
 
 
 def table_live_sensitivity(sens: dict, rules: list[tuple[str, str]], path: str | Path):
-    """ES reduction (and hedge-leg P&L) of the frozen rules under live-data perturbations."""
+    """ES reduction (and hedge-leg P&L net of funding and trading costs) of the frozen rules under live perturbations."""
     head = " & ".join(label for _, label in rules)
     body = []
     for scen, d in sens.items():
-        cells = [f"{_fmt(d[k]['es_red'])} ({_fmt(d[k]['hedge_pnl'], 1, True)})" for k, _ in rules]
-        label = scen[0].upper() + scen[1:].replace(" x2", " $\\times$2")
+        cells = [f"{_fmt(d[k]['es_red'])} ({_fmt(d[k]['hedge_pnl'] - d[k]['cost'], 1, True)})" for k, _ in rules]
+        label = {"book costs": "Book costs (50 bp + fee)"}.get(scen, scen[0].upper() + scen[1:])
         body.append(f"{label} & " + " & ".join(cells) + " \\\\")
     Path(path).write_text(
         f"\\begin{{tabular}}{{@{{}}l{'r' * len(rules)}@{{}}}}\n\\toprule\nVariant & {head} \\\\\n\\midrule\n"

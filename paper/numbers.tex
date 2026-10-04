@@ -29,6 +29,8 @@
 \newcommand{\CorrDaily}{\ensuremath{-}0.21}
 \newcommand{\RobCostMin}{+0.63}
 \newcommand{\RobCostMax}{+0.67}
+\newcommand{\PgridPaths}{64}
+\newcommand{\PgridShifts}{3}
 \newcommand{\RobBaseline}{+0.66}
 \newcommand{\RobLoBaseline}{+0.39}
 \newcommand{\RobHiBaseline}{+0.94}
@@ -64,7 +66,7 @@
 \newcommand{\RobHiPerpetualBtcBook}{+0.92}
 \newcommand{\LiveStart}{1 January 2023}
 \newcommand{\LiveEnd}{3 October 2026}
-\newcommand{\LiveDays}{1372}
+\newcommand{\LiveDays}{1{,}372}
 \newcommand{\LiveEvalStart}{3 April 2024}
 \newcommand{\LiveEvalEnd}{3 October 2026}
 \newcommand{\LiveEvalDays}{914}
@@ -108,7 +110,7 @@
 \newcommand{\LiveMddAlways}{41.7}
 \newcommand{\LiveTurnSwitch}{32.3}
 \newcommand{\LiveCostSwitch}{5.17}
-\newcommand{\LivePnlSwitch}{+6.70}
+\newcommand{\LiveNetSwitch}{+1.5}
 \newcommand{\LiveNotionalAlways}{11.1}
 \newcommand{\LiveTimeOnAlways}{67}
 \newcommand{\LiveFundAlways}{1.4}
@@ -119,7 +121,7 @@
 \newcommand{\LiveEsAlwaysHi}{32.4}
 \newcommand{\LiveVarAlwaysLo}{3.9}
 \newcommand{\LiveVarAlwaysHi}{28.0}
-\newcommand{\LiveBlockLoMin}{4.7}
+\newcommand{\LiveBlockLoMin}{4.4}
 \newcommand{\LiveBlockLoMax}{7.3}
 \newcommand{\LiveDRatchet}{+2.37}
 \newcommand{\LiveDRatchetCi}{[\ensuremath{-}0.22, +4.89]}
@@ -134,6 +136,7 @@
 \newcommand{\LiveExTopTen}{\ensuremath{-}46}
 \newcommand{\LiveWorstBtc}{74}
 \newcommand{\LiveWorstHedge}{36}
+\newcommand{\LiveWorstShare}{48}
 \newcommand{\LiveBestDay}{5 February 2026}
 \newcommand{\LiveBestDayPct}{20}
 \newcommand{\LiveEsExBest}{11.9}
@@ -153,7 +156,7 @@
 \newcommand{\LiveEpIvAfterTime}{15:45}
 \newcommand{\LiveEpIvPeak}{96}
 \newcommand{\LiveEpIvPeakTime}{22:00}
-\newcommand{\LiveEpRise}{69}
+\newcommand{\LiveEpRise}{70}
 \newcommand{\LiveEpBtc}{14}
 \newcommand{\LiveEpOpenMin}{558}
 \newcommand{\LiveEpOpenMax}{609}
@@ -161,22 +164,22 @@
 \newcommand{\LiveEpRatchetMin}{0}
 \newcommand{\LiveEpRatchetMax}{20}
 \newcommand{\LivePlaceboN}{129}
-\newcommand{\LivePlaceboBeaten}{76}
-\newcommand{\LiveTiming}{+0.33}
-\newcommand{\LiveSize}{+2.04}
+\newcommand{\LivePlaceboBeaten}{87}
+\newcommand{\LiveTiming}{+0.34}
+\newcommand{\LiveSize}{+2.03}
 \newcommand{\LivePlaceboMean}{19.9}
 \newcommand{\LiveGridSigOne}{10}
 \newcommand{\LiveGridNOne}{24}
-\newcommand{\LivePlaceboLo}{18.9}
+\newcommand{\LivePlaceboLo}{19.1}
 \newcommand{\LivePlaceboHi}{20.4}
 \newcommand{\LiveGridShifts}{64}
-\newcommand{\LiveGridZero}{+6.66}
-\newcommand{\LiveGridHalf}{+1.55}
-\newcommand{\LiveGridOne}{+0.68}
-\newcommand{\LiveGridRankZero}{98}
-\newcommand{\LiveGridRankOne}{84}
-\newcommand{\LiveSamePlacebo}{91}
-\newcommand{\LiveMidPlacebo}{65}
+\newcommand{\LiveGridZero}{+6.68}
+\newcommand{\LiveGridHalf}{+1.63}
+\newcommand{\LiveGridOne}{+0.71}
+\newcommand{\LiveGridRankZero}{97}
+\newcommand{\LiveGridRankOne}{83}
+\newcommand{\LiveSamePlacebo}{98}
+\newcommand{\LiveMidPlacebo}{71}
 \newcommand{\LiveSameDRatchet}{+2.08}
 \newcommand{\LiveSameDRatchetCi}{[+0.04, +3.90]}
 \newcommand{\LiveMidDRatchet}{+2.50}
@@ -186,13 +189,15 @@
 \newcommand{\LiveMidEsSwitch}{18.4}
 \newcommand{\LiveDelayHour}{16.0}
 \newcommand{\LiveDelayDay}{12.6}
-\newcommand{\LiveSamePnlSwitch}{+12.80}
-\newcommand{\LiveBookCostSwitch}{16.2}
+\newcommand{\LiveSameNetSwitch}{+7.6}
+\newcommand{\LiveBookCostSwitch}{18.1}
+\newcommand{\LiveBookNetSwitch}{\ensuremath{-}11.4}
 \newcommand{\LiveContracts}{248}
-\newcommand{\LiveMedianOi}{87}
+\newcommand{\LiveMedianOi}{103}
 \newcommand{\LiveAboveOi}{61}
 \newcommand{\LiveAboveOiAll}{41}
 \newcommand{\LiveMaxNotional}{64}
+\newcommand{\LiveMaxNotionalHalf}{72}
 \newcommand{\LiveOiMultipleLo}{2}
 \newcommand{\LiveOiMultipleHi}{23}
 \newcommand{\LiveBestTraded}{353}
@@ -203,6 +208,15 @@
 \newcommand{\LiveBookBuy}{0.50}
 \newcommand{\LiveBookSell}{0.50}
 \newcommand{\LiveBookTopSpread}{0.34}
+\newcommand{\LiveBookSizeSpread}{1.00}
+\newcommand{\LiveMatchedScale}{1.13}
+\newcommand{\LiveMatchedEs}{18.6}
+\newcommand{\LiveHeldEs}{20.5}
+\newcommand{\LiveHeldCost}{3.65}
+\newcommand{\LiveRatchetCost}{3.03}
+\newcommand{\LiveGridMaxEs}{20.4}
+\newcommand{\LiveGridStrictLo}{51}
+\newcommand{\LiveGridStrictHi}{84}
 \newcommand{\LiveBookBtc}{4}
 \newcommand{\LiveQlOne}{0.96}
 \newcommand{\LiveDmOne}{\ensuremath{-}2.25}

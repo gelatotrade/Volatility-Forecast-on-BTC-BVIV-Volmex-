@@ -47,9 +47,13 @@ def funding_per_bar(events: pd.DataFrame, index: pd.DatetimeIndex) -> pd.Series:
 
 
 def btc_perp_funding(events: pd.DataFrame, index: pd.DatetimeIndex) -> pd.Series:
-    """Annualised BTC perpetual funding rate per bar from Bitfinex settlements (8h rates)."""
+    """Annualised BTC perpetual funding rate per bar from Bitfinex settlements (8h rates).
+
+    A settlement at E accrues over (E - 8h, E]; row t carries the rate of bar t+1, because ``backtest``
+    charges ``btc_funding[t-1]`` to bar t (the convention of ``bviv_funding`` and of the simulator).
+    """
     rate = events["rate"].copy()
-    rate.index = rate.index - pd.Timedelta("8h")          # a settlement at E accrues over (E - 8h, E]
+    rate.index = rate.index - pd.Timedelta("8h") - pd.Timedelta("15min")
     return (rate.reindex(index, method="ffill").fillna(0.0) * 3 * 365)
 
 

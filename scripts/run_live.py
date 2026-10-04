@@ -41,7 +41,8 @@ START, END = "2023-01-01", "2026-10-04"     # END is exclusive: the sample ends 
 PLACEBO_STEP = 7                            # days between the selected ratchet's placebo shifts
 GRID_STEP = 14                              # days between placebo shifts for the 72-rule grid
 MID_BAND = 0.05                             # mid-fill sensitivity: quotes beyond +-5% of the mark are not credible
-BOOK_COST_BPS = 50.0                        # per side: what the dated book charged for one BTC's hedge
+BOOK_COST_BPS = 50.0                        # per side, before the exchange fee: the dated book's price impact for one BTC's hedge
+BLOCKS = (1, 2, 5, 10, 20, 30, 40)          # mean block lengths (days) for the bootstrap sensitivity
 
 
 def es_red(r: np.ndarray, u: np.ndarray) -> float:
@@ -143,6 +144,8 @@ def book_facts(contracts: float) -> dict:
     mid = (bids[bids[:, 1] >= 1, 0].max() + asks[asks[:, 1] >= 1, 0].min()) / 2
 
     def walk(side: np.ndarray) -> float:
+        if side[:, 1].sum() < contracts:                           # the snapshot's levels cannot fill the order
+            return float("nan")
         filled = np.minimum(np.cumsum(side[:, 1]), contracts)
         return float(np.diff(np.r_[0.0, filled]) @ side[:, 0] / contracts)
 
@@ -150,6 +153,7 @@ def book_facts(contracts: float) -> dict:
     bid_depth = bids[bids[:, 0] >= mid * 0.975, 1].sum()
     return {"time": snap["time"][:10], "mid": float(mid),
             "top_spread_pct": float(100 * (asks[0, 0] - bids[0, 0]) / mid),
+            "size_spread_pct": float(100 * (asks[asks[:, 1] >= 1, 0].min() - bids[bids[:, 1] >= 1, 0].max()) / mid),
             "buy_cost_pct": float(100 * (walk(asks) / mid - 1)), "sell_cost_pct": float(100 * (1 - walk(bids) / mid)),
             "ask_depth_2_5pct": float(ask_depth), "bid_depth_2_5pct": float(bid_depth),
             "btc_capacity_2_5pct": float(min(ask_depth, bid_depth) / contracts)}
@@ -201,7 +205,8 @@ def main():
     panel = live.build_panel(START, END)
     bars, perp_start = panel["bars"], panel["perp_start"]
     days_to_perp = int((perp_start - bars.index[0]).days)
-    cfg = HedgeConfig(fee_bps=args.fee, slippage_bps=args.slippage, warmup_days=days_to_perp, exec_delay=1)
+    cfg = HedgeConfig(fee_bps=args.fee, slippage_bps=args.slippage, warmup_days=days_to_perp, exec_delay=1,
+                      warmup_bars=int(bars.index.get_loc(panel["first_live"])))   # no position before the listing
     proto = Protocol(hedge_eval_start=days_to_perp, forecast_eval_start=365, full_forecasts=True)
     candles_1d = data.fetch_bitfinex_candles(live.BVIV_PERP, "1D", "2024-04-01", END)
     candles_15m = data.fetch_bitfinex_candles(live.BVIV_PERP, "15m", "2024-04-01", END)
@@ -230,6 +235,17 @@ def main():
     metrics = out["metrics"]
     metrics.to_csv(OUT / "metrics.csv")
     placebo_books = run_books(bars, cfg, placebos, sig, start)
+
+    # ---- untimed benchmarks for the size term: the MV hedge scaled to the placebos' average notional,
+    # and the ratchet's overlay held permanently (o_t = 1, i.e. a trigger on every bar)
+    pl_notional = np.mean([book_metrics(placebo_books[p.name], placebo_books["Unhedged"])["notional"] for p in placebos])
+    scale = float(pl_notional / metrics.loc["always|1", "notional"])
+    bench = [Rule("always|matched", "always", scale=scale),
+             Rule("overlay|held", "ratchet", z_enter=np.inf, halflife_days=base_rt.halflife_days, floor=base_rt.floor,
+                  use_forecast=base_rt.use_forecast)]
+    bench_books = run_books(bars, cfg, bench, sig, start)
+    facts["benchmarks"] = {"matched_scale": scale, "placebo_notional": float(pl_notional),
+                           **{r.name: book_metrics(bench_books[r.name], bench_books["Unhedged"]) for r in bench}}
     evals = pd.concat([ev.assign(h=h).rename_axis("model").reset_index() for h, ev in out["evals"].items()])
     evals.to_csv(OUT / "forecast_evals.csv", index=False)
     facts["forecast_n"] = {str(h): int(ev.attrs.get("n", 0)) for h, ev in out["evals"].items()}
@@ -242,11 +258,11 @@ def main():
     for a, b in ((rt, "always|1"), (rt, "always|1.5"), (sw, "always|1"), ("always|1", "Unhedged"), ("always|1.5", "always|1")):
         for name, fn in (("es", es_red), ("var", var_red)):
             boot[f"{a} - {b} ({name})"] = live.paired_block_bootstrap(books, "Unhedged", fn, a, b)
-    for block in (1.0, 40.0):
+    for block in BLOCKS:
         boot[f"always|1 - Unhedged (es, block {block:g})"] = live.paired_block_bootstrap(
-            books, "Unhedged", es_red, "always|1", "Unhedged", block=block)
+            books, "Unhedged", es_red, "always|1", "Unhedged", block=float(block))
         boot[f"{rt} - always|1 (es, block {block:g})"] = live.paired_block_bootstrap(
-            books, "Unhedged", es_red, rt, "always|1", block=block)
+            books, "Unhedged", es_red, rt, "always|1", block=float(block))
     (OUT / "bootstrap.json").write_text(json.dumps(boot, indent=2))
 
     # ---- placebo distribution for the selected ratchet
@@ -296,7 +312,7 @@ def main():
                         ("execution 1 hour later", bars, cfg.with_(exec_delay=4)),
                         ("execution 1 day later", bars, cfg.with_(exec_delay=96)),
                         ("fills at the quoted mid", mid_fill, cfg),
-                        (f"costs {BOOK_COST_BPS:g} bp per side", bars, cfg.with_(slippage_bps=BOOK_COST_BPS - args.fee)),
+                        ("book costs", bars, cfg.with_(slippage_bps=BOOK_COST_BPS)),
                         ("no trading costs", bars, cfg.with_(fee_bps=0, slippage_bps=0)),
                         ("funding ignored", bars.assign(bviv_funding=0.0, bviv_carry=0.0), cfg),
                         ("perpetual BTC book", bars, cfg.with_(instrument="perp"))):
@@ -312,7 +328,7 @@ def main():
     day_vol = candles_1d["volume"].reindex(pd.date_range(start, bars.index[-1].floor("1D"), freq="D")).fillna(0.0)
     facts["capacity"] = {
         "share_held": float(100 * held.mean()), "median_contracts_per_btc": float(pos[held].median()),
-        "median_oi": float(oi[seen].median()),
+        "median_oi": float(oi[seen].median()), "median_oi_when_held": float(oi[held & seen].median()),
         "share_above_oi_when_held": float(100 * (pos > oi)[held & seen].mean()),
         "share_above_oi_all": float(100 * (held & seen & (pos > oi)).sum() / seen.sum()),
         "max_notional_pct": float(100 * (res_ev["always|1"]["notional"] / res_ev["always|1"]["btc_notional"]).max()),
@@ -372,10 +388,10 @@ def main():
     trig = z.index[z < base_rt.z_enter][0]
     after = iv.loc[trig: trig + pd.Timedelta("45min")]
     pos_day = {k: on(day, out["results"][k]["position"]) for k in ("always|1", sw, rt)}
-    later = pos_day["always|1"].index > trig + pd.Timedelta("15min") * cfg.exec_delay
+    later = pos_day["always|1"].index >= trig + pd.Timedelta("15min") * cfg.exec_delay
     ratio = (pos_day[rt] / pos_day["always|1"])[later]
     facts["episode"] = {
-        "trigger_close": bar_close(trig), "iv_midnight": float(iv.iloc[0]),
+        "trigger_close": bar_close(trig), "iv_midnight": float(bars["bviv"].loc[:day].iloc[-2]),   # value at 00:00
         "iv_hour_before": float(iv.loc[trig - pd.Timedelta("1h")]), "iv_trigger": float(iv.loc[trig]),
         "iv_after_max": float(after.max()), "iv_after_time": bar_close(after.idxmax()),
         "iv_peak": float(iv.max()), "iv_peak_time": bar_close(iv.idxmax()),

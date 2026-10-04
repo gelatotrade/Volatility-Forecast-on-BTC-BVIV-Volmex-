@@ -59,12 +59,12 @@ WIDTH = 6.3  # inches, the paper's text width
 
 def fig_live_market(daily: pd.DataFrame, perp_start: pd.Timestamp, path: str):
     """BTC, the official BVIV index and the Bitfinex BVIV-perp funding rate, 2023-2026."""
-    fig, axes = plt.subplots(3, 1, figsize=(WIDTH, 3.25), sharex=True,
+    fig, axes = plt.subplots(3, 1, figsize=(WIDTH, 3.0), sharex=True,
                              gridspec_kw={"hspace": 0.42, "height_ratios": [1, 1, 0.9]})
     ax = axes[0]
     ax.plot(daily.index, daily["btc"], color=BLUE, lw=1.0)
     ax.set_yscale("log")
-    ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10, subs=(1.0, 1.5, 2.0, 3.0, 5.0, 7.0)))
+    ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10, subs=(1.0, 2.0, 3.0, 5.0)))
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v / 1000:,.0f}k"))
     ax.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     ax.set_title("BTC (USD, log scale)", color=INK)
@@ -126,10 +126,10 @@ def fig_live_episode(ep: pd.DataFrame, z_enter: float, names: dict[str, str], pa
 def fig_live_hedge(daily: pd.DataFrame, key: str, path: str):
     """Cumulative P&L of the always-on hedge leg: index P&L, funding, and the two net of each other."""
     d = daily[[f"{key}|hedge_mtm", f"{key}|funding", f"{key}|cost"]].dropna()
-    fig, ax = plt.subplots(figsize=(WIDTH, 1.9))
+    fig, ax = plt.subplots(figsize=(WIDTH, 1.75))
     ax.axhline(0, color=AXIS, lw=0.8)
     ax.plot(d.index, 100 * d[f"{key}|hedge_mtm"].cumsum(), color=BLUE, lw=1.3, label="index P&L of the BVIV position")
-    ax.plot(d.index, -100 * d[f"{key}|funding"].cumsum(), color=ORANGE, lw=1.3, label="funding paid (negative = cost)")
+    ax.plot(d.index, -100 * d[f"{key}|funding"].cumsum(), color=ORANGE, lw=1.3, label="funding (negative = paid)")
     net = d[f"{key}|hedge_mtm"] - d[f"{key}|funding"]
     ax.plot(d.index, 100 * net.cumsum(), color=INK2, lw=1.0, label="hedge P&L net of funding")
     ax.set_title("Always-on hedge: cumulative P&L (% of BTC notional)", color=INK)
