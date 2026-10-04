@@ -2,7 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 data/raw/
-results/run.log
+results/*.log
 # LaTeX build products (the compiled PDF is tracked)
 paper/*.aux
 paper/*.bbl

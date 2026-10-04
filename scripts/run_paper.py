@@ -114,6 +114,22 @@ def placebo_summary(placebo: pd.DataFrame, ratchet_key: str) -> dict[str, float]
     return {"es_placebo": float(fake.median()), "es_ratchet": float(w[ratchet_key].median()), **stats}
 
 
+def crash_cluster_diagnostic(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str], n: int = 24) -> dict[str, float]:
+    """Hedge-leg P&L on the hedged book's own worst 2.5% days, baseline vs. crashes clustered in stress."""
+    rules = [Rule("Unhedged", "unhedged"), rule_from_key("always|1"), rule_from_key(selection["ratchet"])]
+    out = {}
+    for scen, p in (("base", params), ("cluster", params.with_(**{k: v for k, v, _ in SCENARIOS}["Crashes cluster in stress"]))):
+        acc = {"always|1": [], selection["ratchet"]: []}
+        for seed in range(n):
+            res = analyse(simulate_market(p, seed).bars, cfg, rules, Protocol(full_forecasts=False))
+            for key in acc:
+                book = res["books"][key].loc[res["hedge_start"]:]
+                worst = book["total"] <= book["total"].quantile(0.025)
+                acc[key].append(100 * book["hedge"][worst].mean())
+        out[scen] = {k: float(sum(v) / len(v)) for k, v in acc.items()}
+    return out
+
+
 def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str], compile_pdf: bool):
     fig_dir, tab_dir = PAPER / "figures", PAPER / "tables"
     fig_dir.mkdir(parents=True, exist_ok=True)
@@ -165,6 +181,15 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
     d_rt = paired(test, "es_red", rt, "always|1")
     d_sw = paired(test, "es_red", sw, "always|1")
     d_mdd = paired(test, "mdd", rt, "always|1")
+    d_var = paired(test, "var_red", rt, "always|1")
+    d_tail = paired(test, "tail_offset", rt, "always|1")
+    fc_twin = rt[:-1] + ("1" if rt.endswith("0") else "0")
+    d_fc = paired(test, "es_red", fc_twin, rt)
+    ladder = med_all[med_all.index.str.startswith("always|")]
+    grid = med_all[med_all.index.str.startswith("ratchet|")]
+    best_static = grid["hedge_cost"].map(lambda c: ladder.loc[ladder["hedge_cost"] <= c, "es_red"].max())
+    above = float((grid["es_red"] > best_static.fillna(-1e9)).mean())
+    diag = crash_cluster_diagnostic(params, cfg, selection)
     rr, ss = rule_from_key(rt), rule_from_key(sw)
     f = fsum.set_index(["h", "model"])
     nums = {
@@ -182,6 +207,14 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         "share_ratchet": f"{100 * d_rt['share_pos']:.0f}", "d_es_switch": f"{d_sw['mean']:+.2f}",
         "d_mdd_ratchet": f"{d_mdd['mean']:+.2f}",
         "es_red_always_two": med_all.loc["always|2", "es_red"], "es_red_always_three": med_all.loc["always|3", "es_red"],
+        "es_red_always_onehalf": med_all.loc["always|1.5", "es_red"], "cost_always_onehalf": f"{med_all.loc['always|1.5', 'hedge_cost']:.2f}",
+        "var_red_always_onehalf": med_all.loc["always|1.5", "var_red"], "var_red_switch": med_all.loc[sw, "var_red"],
+        "d_var_ratchet": f"{d_var['mean']:+.2f}", "d_tail_ratchet": f"{d_tail['mean']:+.1f}",
+        "share_tail_ratchet": f"{100 * d_tail['share_pos']:.0f}", "d_es_switch_lo": f"{d_sw['lo']:+.2f}", "d_es_switch_hi": f"{d_sw['hi']:+.2f}",
+        "d_es_fc": f"{d_fc['mean']:+.2f}", "d_es_fc_lo": f"{d_fc['lo']:+.2f}", "d_es_fc_hi": f"{d_fc['hi']:+.2f}",
+        "share_above_ladder": f"{100 * above:.0f}", "n_ratchet_grid": f"{len(grid)}",
+        "diag_base_always": f"{diag['base']['always|1']:+.2f}", "diag_base_ratchet": f"{diag['base'][rt]:+.2f}",
+        "diag_cluster_always": f"{diag['cluster']['always|1']:+.2f}", "diag_cluster_ratchet": f"{diag['cluster'][rt]:+.2f}",
         "ratchet_z": f"{rr.z_enter:g}", "ratchet_hl": f"{rr.halflife_days:g}", "ratchet_floor": f"{rr.floor:g}",
         "ratchet_fc": "with" if rr.use_forecast else "without",
         "switch_z": f"{ss.z_enter:g}", "switch_exit": f"{ss.z_exit:g}",
@@ -199,6 +232,8 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
     for r in robust.to_dict("records"):
         key = "rob." + r["scenario"].lower().replace("x0.5", "half").replace("x2", "double").replace(" 0", " zero").replace(" 12", " twelve")
         nums[key] = f"{r['d_mean']:+.2f}"
+        nums[key.replace("rob.", "rob lo.")] = f"{r['d_lo']:+.2f}"
+        nums[key.replace("rob.", "rob hi.")] = f"{r['d_hi']:+.2f}"
     report.write_numbers(nums, PAPER / "numbers.tex")
 
     if compile_pdf:
