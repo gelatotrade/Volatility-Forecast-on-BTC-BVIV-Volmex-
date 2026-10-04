@@ -1,0 +1,247 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[sc]{mathpazo}
+\linespread{1.06}
+\usepackage[a4paper,margin=2.15cm,top=2.0cm,bottom=2.3cm]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[font=small,labelfont=bf,skip=3pt]{caption}
+\usepackage[round,authoryear]{natbib}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={Hedging Bitcoin with Its Own Fear Gauge},pdfauthor={Gregor Albiez},pdfsubject={BTC volatility forecasting and BVIV hedging with a 15-minute VWAP ratchet},pdfkeywords={Bitcoin, implied volatility, BVIV, VWAP, hedging, HAR}}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{url}
+\usepackage{multicol}
+
+\definecolor{ink}{HTML}{0b0b0b}
+\titleformat{\section}{\normalfont\large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{9pt plus 2pt minus 2pt}{4pt plus 1pt}
+\titlespacing*{\subsection}{0pt}{6pt plus 2pt minus 1pt}{3pt plus 1pt}
+\setlist{nosep,leftmargin=1.3em}
+\setlength{\parskip}{0pt}
+\setlength{\textfloatsep}{9pt plus 2pt minus 2pt}
+\setlength{\floatsep}{8pt plus 2pt minus 2pt}
+\setlength{\intextsep}{8pt plus 2pt minus 2pt}
+\setlength{\bibsep}{1.5pt}
+\renewcommand{\bibfont}{\footnotesize}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\BVIV}{\textsc{bviv}}
+\newcommand{\IV}{\mathit{IV}}
+\newcommand{\RV}{\mathit{RV}}
+
+\input{numbers}
+
+\title{\vspace{-0.6em}\textbf{Hedging Bitcoin with Its Own Fear Gauge}\\[2pt]
+\large Volatility Forecasts, the Volmex \BVIV{} Index and a 15-Minute VWAP Ratchet}
+\author{Gregor Albiez}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+\vspace{-1.2em}
+
+\begin{abstract}
+\noindent Bitcoin implied volatility has become directly tradable: perpetual futures on the Volmex \BVIV{} index have listed on Bitfinex since 2024 and on Hyperliquid since September 2026. This paper asks how BTC volatility should be forecast when a 30-day implied index is observable, and whether a long-\BVIV{} position, timed by a VWAP signal computed on 15-minute bars, hedges spot or perpetual BTC exposure better than a minimum-variance hedge. We build a calibrated market in which the \BVIV{} perpetual is priced without arbitrage, so long-volatility hedgers pay exactly a calibrated carry, and evaluate seven forecasting models and \NRules{} hedging rules with a strict separation between training and \NTest{} test paths. Implied volatility wins at horizons of a week or more, HAR at one day, and their combination is the most robust choice. Switching the hedge on and off around VWAP destroys value through turnover. A \emph{VWAP ratchet}, which adds crash protection quickly on a break below the VWAP band and removes it slowly, raises the median reduction in expected shortfall from \EsRedAlways\% to \EsRedRatchet\% at a cost of \CostRatchet\% of notional a year, and beats simply scaling the static hedge. Volatility hedges stay partial, because the spot-vol correlation of BTC is weak and changes sign across regimes. The entire pipeline runs unchanged on live Binance, Bitfinex and Volmex data.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+
+A holder of bitcoin, whether in spot or through a perpetual swap, is exposed to two kinds of risk: an ordinary random walk, and sudden crashes in which liquidity disappears and implied volatility spikes. Delta hedges with futures remove the first and, with it, the position itself. Crash protection has historically required options. A cheaper and more modular instrument now exists. The Volmex \BVIV{} index measures 30-day BTC implied volatility in a model-free way \citep{volmex2024iv,demeterfi1999guide}. It has traded as a USDT-margined perpetual on Bitfinex since April 2024 \citep{coindesk2024bitfinex}, on gTrade since June 2025 \citep{coindesk2025gtrade}, and as \texttt{mkts:BVIV} on Hyperliquid since 21 September 2026 \citep{coindesk2026hyperliquid}. Regulated alternatives followed: CME announced Bitcoin Volatility futures in May 2026 \citep{cme2026bvi}.
+
+Whether a long-volatility position hedges a long-BTC book depends on the spot-vol correlation. In BTC this correlation is weak and unstable. Positive return shocks have historically raised volatility more than negative ones \citep{bouri2017return,baur2018asymmetric}, an asymmetry that has faded over time \citep{takaishi2021time}. The correlation between BTC and DVOL turned strongly positive in early 2023 \citep{coindesk2023dvol}, while \BVIV{} trended down through the 2024--25 rally \citep{coindesk2025rally}. Equity investors learned that long-volatility hedges look good \emph{ex ante} but are eroded by carry and costs \citep{whaley2013trading,alexander2016diversification,israelov2019pathetic}, except in genuine crises \citep{szado2009vix}. A hedge therefore has to be \emph{timed}. This paper studies a timing signal that every intraday trader already watches: price relative to its volume-weighted average.
+
+\paragraph{Contributions.} (i) We compare seven daily volatility forecasts, including the \BVIV{}-implied forecast, with robust loss functions. (ii) We derive the P\&L of a BTC book hedged with \BVIV{} perpetuals, splitting funding into an arbitrage-free \emph{drift transfer} and a \emph{carry premium}. (iii) We propose the VWAP ratchet, a hysteresis rule that is fast to protect and slow to un-hedge, and show why naive VWAP switching fails. (iv) We report Monte Carlo evidence under a strict train/test protocol and ship a pipeline that reproduces every number on live data.
+
+\section{The BVIV index and the economics of a volatility hedge}\label{sec:background}
+
+\paragraph{Index and instruments.} \BVIV{} applies variance-swap replication \citep{demeterfi1999guide} to a combined book of Deribit and OKX BTC options. It updates about once per second and is served at 1- to 60-minute resolution by the Volmex API. Deribit's DVOL uses the same VIX-style construction on Deribit options alone \citep{deribit2021dvol}, which makes it a natural substitute for history before 2024. The perpetuals pay one dollar per index point per contract. On Bitfinex the mark price is the index; funding follows the spread between perpetual and mark and can briefly pause trading. On Hyperliquid, funding adds a default interest leg of 0.01\% per eight hours to a premium term \citep{hyperliquid2026funding}. That is about 11\% a year of notional, or roughly \HedgeCarry{} vol points a year at \BVIV{} $\approx$ 55. This leg is our baseline \emph{carry} of a long-volatility position.
+
+\paragraph{Variance risk premium.} Implied variance exceeds subsequent realised variance on average. For BTC the premium is about 0.14 a year in variance units, against about 0.02 for the S\&P 500 \citep{almeida2024risk}, which is consistent with \citet{alexander2021bitcoin} and the equity evidence of \citet{carr2009variance}. A hedge that is long \BVIV{} pays this premium indirectly. The index itself has no drift, but the perpetual's funding prices in the index's expected path.
+
+\paragraph{Spot-vol dynamics.} The minimum-variance hedge ratio \citep{johnson1960theory,ederington1979hedging} of BTC against \BVIV{} is proportional to their correlation. Because that correlation is regime-dependent \citep{huang2022leverage}, static ratios are misspecified, and dynamic estimates \citep{kroner1993timevarying,engle2002dcc} are the baseline.
+
+\section{Forecasting BTC volatility}\label{sec:forecast}
+
+\paragraph{Measurement.} From 15-minute log returns $r_{d,i}$ (96 per UTC day) we compute realised variance $\RV_d=\sum_i r_{d,i}^2$, together with bipower variation and semivariances \citep{andersen2003modeling,barndorff2004power,patton2015good}. Fifteen minutes is coarser than the 5-minute rule of thumb \citep{liu2015does}, but it matches the trading frequency of the hedge and is robust to the microstructure of a 24/7 market. We use close-to-close returns and not bar VWAPs, because returns between interval averages are smoothed by about one third \citep{working1960note}.
+
+\paragraph{Models.} Each model forecasts the average daily variance over days $t{+}1,\dots,t{+}h$, $h\in\{1,7,30\}$, using information up to the close of day $t$. The models are:
+\begin{itemize}
+  \item a random walk (RW);
+  \item RiskMetrics EWMA \citep{jpmorgan1996riskmetrics};
+  \item GARCH(1,1) with Student-$t$ errors, re-estimated monthly;
+  \item the HAR model of \citet{corsi2009simple} with a 7-day week;
+  \item \BVIV{} itself, both raw ($\IV_t^2/365$, ``IV-raw'') and bias-corrected by OLS (``IV'');
+  \item HAR augmented with implied variance (HAR-IV):
+\end{itemize}
+\begin{equation}\label{eq:har}
+\overline{\RV}_{t+1:t+h}=\beta_0+\beta_d\RV_t+\beta_w\overline{\RV}_{t-6:t}+\beta_m\overline{\RV}_{t-29:t}+\beta_{iv}\,\IV_t^2/365+\varepsilon_{t+h}.
+\end{equation}
+The regressions are re-estimated daily on an expanding window that contains only targets already observed, with no overlap leakage. We evaluate forecasts with QLIKE, $L(\RV,F)=\RV/F-\ln(\RV/F)-1$, which is robust to proxy noise \citep{patton2011volatility}. We also report the Mincer--Zarnowitz $R^2$ and Diebold--Mariano tests against HAR with Newey--West variance \citep{mincer1969evaluation,diebold1995comparing}.
+
+\paragraph{Results.} Table~\ref{tab:forecast} and Figure~\ref{fig:forecast} confirm the pattern documented on Deribit data by \citet{hoang2020forecasting}:
+\begin{itemize}
+  \item At one day, HAR is best. Implied volatility alone is much worse (QLIKE ratio \QlIvOne), because a 30-day index cannot track tomorrow's variance, and GARCH on daily returns lags (\QlGarchOne), as \citet{bergsli2022forecasting} found for HAR versus GARCH on BTC.
+  \item At 7 and 30 days, implied volatility dominates. The bias-corrected index cuts QLIKE to \QlIvSeven{} and \QlIvThirty{} of HAR.
+  \item HAR-IV is never far from the best at any horizon (\QlHarIvOne, \QlHarIvSeven, \QlHarIvThirty).
+\end{itemize}
+Raw IV is biased upward by the variance risk premium, which QLIKE penalises only mildly. For hedging we therefore use HAR-IV as the 30-day forecast.
+
+\begin{table}[t]
+\centering\small
+\input{tables/forecasts}
+\caption{Out-of-sample forecast accuracy relative to HAR across \NTest{} test paths. QL ratio: median ratio of a model's QLIKE to HAR's (below 1 is better; best in bold). MZ $R^2$: mean Mincer--Zarnowitz $R^2$. DM win: share of paths on which a Diebold--Mariano test rejects equal accuracy in the model's favour at the 5\% level.}
+\label{tab:forecast}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/forecasts}
+\caption{Median QLIKE relative to HAR by model and horizon; the best model at each horizon is highlighted.}
+\label{fig:forecast}
+\end{figure}
+
+\section{A BTC book hedged with BVIV perpetuals}\label{sec:hedge}
+
+\paragraph{P\&L.} The book is long $q$ BTC at price $S_t$ and long $H_t\ge 0$ \BVIV{} perpetual contracts at mark $F_t$, each paying \$1 per index point. A position chosen at the close of bar $t$ earns over bar $t{+}1$:
+\begin{equation}\label{eq:pnl}
+\Pi_{t+1}=q\,(S_{t+1}-S_t)\;-\;\mathbb{1}_{\text{perp}}\,q\,S_t f_t\Delta\;+\;H_t\,(F_{t+1}-F_t)\;-\;H_t\,\phi_t\;-\;c\,|H_{t+1}-H_t|\,F_{t+1},
+\end{equation}
+where $f_t$ is the BTC perpetual's funding rate, $\phi_t$ the \BVIV{} funding per contract and $c$ the proportional trading cost. A perpetual with funding intensity $k$ trades at $\E_t[\int_0^\infty k e^{-ks} I_{t+s}\,ds]$, the expected index sampled at a random time \citep{he2022perpetual,ackerer2025perpetual}. In the fast-funding limit the mark equals the index, and funding splits into two parts:
+\begin{equation}\label{eq:funding}
+\phi_t=\underbrace{\E_t[I_{t+1}]-I_t}_{\text{drift transfer}}+\underbrace{\bar\kappa\,\Delta}_{\text{carry premium}}.
+\end{equation}
+The first term compensates longs exactly for the index's expected path: after a spike, longs \emph{receive} funding while the index mean-reverts. Only the premium $\bar\kappa$ (vol points a year) is a cost, so we report hedge costs as carry premium plus trading costs, not as raw funding.
+
+\paragraph{Hedge ratios.} The minimum-variance hedge is $H_t^\ast=-qS_t\,\beta_t$, where $\beta_t=\mathrm{Cov}_t(r,\Delta F)/\mathrm{Var}_t(\Delta F)$ is estimated on 15-minute changes with an EWMA (half-life 14 days). We impose $H\ge0$, since a protective hedge is never short volatility. For crash sizing we also estimate a \emph{downside semi-beta} $\beta^-_t$ on falling bars only \citep{ang2006downside}, shrunk towards $\beta_t$ by its effective sample size, which gives $H^-_t=-qS_t\beta^-_t$.
+
+\paragraph{The VWAP signal.} BTC trades 24/7, so we anchor VWAP on a rolling 24-hour window, which avoids an arbitrary session open; Section~\ref{sec:results} also tests a UTC-session anchor. Exchange klines give each bar's exact VWAP as quote volume divided by base volume. For Brownian prices, the gap between the last price and its average over a window $w$ has standard deviation $\sigma\sqrt{w/3}$, so the scale-free breakdown statistic is
+\begin{equation}\label{eq:z}
+z_t=\frac{\ln\!\big(S_t/\mathrm{VWAP}^{24h}_t\big)}{\hat\sigma_t\sqrt{1/3}},
+\end{equation}
+where $\hat\sigma_t$ is a causal one-day volatility forecast. It is an EWMA of 15-minute squared returns, de-seasonalised by a trailing hour-of-week profile; intraday volatility in crypto follows strong and growing periodic patterns \citep{andersen1997intraday,hansen2024periodicity,eross2019intraday}. In this way the volatility forecast of Section~\ref{sec:forecast} sets the band width. Intraday momentum and reversal both exist in BTC \citep{shen2022bitcoin,wen2022intraday}, so we treat $z$ as a \emph{state} variable, not a return forecast.
+
+\paragraph{Rules.} We compare four families, each with long-only positions, a hedge cap of 50\% of BTC notional and a rebalancing band $b=25\%$. The band follows the no-trade-region logic of \citet{whalley1997asymptotic}: the hedge is only traded when its target moves more than $b$ away from the current position.
+\begin{itemize}
+  \item \textbf{Always-on:} $H_t=\lambda H_t^\ast$, scaled by $\lambda\in\{0.5,\dots,3\}$.
+  \item \textbf{VWAP-switch:} $H_t=g_tH^-_t$. The gate $g_t$ turns on when $z_t<z_{in}$ and off when $z_t>z_{out}$, after a minimum hold of four hours.
+  \item \textbf{VWAP-ratchet:} an overlay $o_t$ jumps to 1 on a breakdown and decays with half-life $\tau$:
+  \begin{equation}\label{eq:ratchet}
+  o_t=\begin{cases}1 & z_t<z_{in}\\ 2^{-1/\tau}\,o_{t-1} & \text{otherwise,}\end{cases}\qquad
+  H_t=\varphi H_t^\ast+o_t\max\!\big(H^-_t\,m_t-\varphi H_t^\ast,\,0\big),
+  \end{equation}
+  where $\varphi$ is a core floor and $m_t$ an optional size multiplier that grows with forecast ``cheapness'', the log ratio of the HAR-IV variance forecast to implied variance.
+  \item \textbf{Oracle:} $H^-_t$ held only during the latent stress regime. It is infeasible and serves as an upper bound for regime timing.
+\end{itemize}
+The ratchet's asymmetry is the point of the design. Re-triggering inside an episode refreshes $o_t$ without trading, so whipsaw around VWAP costs nothing, whereas the switch pays a round trip every time price crosses the band.
+
+\section{Experimental design}\label{sec:design}
+
+\paragraph{Calibrated market.} Live exchange data could not be accessed from the build environment, so we evaluate the rules in a simulated market calibrated to the stylised facts above. The pipeline nevertheless ships loaders for live data (Section~\ref{sec:impl}).
+\begin{itemize}
+  \item \emph{Variance and returns.} Log-variance is the sum of a slow and a fast Ornstein--Uhlenbeck factor. The fast factor tracks a three-state hidden regime (calm, stress, euphoria; expected durations 30/5/10 days) and receives EGARCH-type shocks \citep{nelson1991conditional}, $u_t=\theta_{R}z_t+\gamma(|z_t|-\sqrt{2/\pi})+\sqrt{1-\theta_R^2-\gamma^2(1-2/\pi)}\,\varepsilon_t$. Here $z_t$ is the return shock. The signed loading $\theta_R$ is negative in calm and stress and positive in euphoria (inverse leverage), and the size loading $\gamma$ makes large moves of either sign raise volatility.
+  \item \emph{Jumps and seasonality.} Compound-Poisson jumps cluster in stress and push variance up. Volatility and volume follow hour-of-day and weekend seasonality, and bars are built from one-minute paths so that OHLC and the bar VWAP behave like exchange klines.
+  \item \emph{Index.} \BVIV{} equals the model's own expectation of 30-day average variance, priced with the exact regime transition matrix $e^{Qs}$, inflated by a variance premium and perturbed by a persistent sentiment factor and fixing noise.
+  \item \emph{Funding.} The drift transfer in \eqref{eq:funding} is computed exactly one bar ahead: summed over regime transitions, by Gauss--Hermite quadrature over jumps, and to second order in Gaussian shocks. A unit test verifies it against brute-force simulation, so the perpetual offers no free lunch from mean reversion.
+\end{itemize}
+Table~\ref{tab:calib} compares simulated moments with their empirical anchors, and Figure~\ref{fig:market} shows a representative path.
+
+\begin{table}[t]
+\centering\small
+\input{tables/calibration}
+\caption{Simulated moments across \NTest{} test paths of \SimDays{} days (15-minute bars).}
+\label{tab:calib}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/market}
+\caption{A representative simulated path: BTC and \BVIV{} on 15-minute bars (4-hour sampling for display), with the latent stress regime shaded.}
+\label{fig:market}
+\end{figure}
+
+\paragraph{Protocol.} All signals are causal; unit tests verify that truncating the sample leaves every past value unchanged. Rule parameters are selected on \NTrain{} \emph{training} paths, separate from the \NTest{} \emph{test} paths reported below. This avoids the data-snooping trap of picking the best of many rules on the evaluation sample \citep{white2000reality,hansen2005spa,bailey2014pseudo}. The grid contains \NRules{} rules: $z_{in}\in\{-1,-1.5,-2\}$, $\tau\in\{0.5,1,2,4\}$ days, $\varphi\in\{0,0.5,1\}$, with and without forecast sizing, plus the switch, always-on and oracle families. The selection criterion is the median reduction in expected shortfall (ES$_{97.5}$) of daily returns, measured \emph{net} of carry and trading costs. Hedging is evaluated from day 200 and forecasts from day 365. Costs are \Fee{} bp fee plus \Slip{} bp slippage per side on traded notional, and the carry is \HedgeCarry{} vol points a year.
+
+\section{Results}\label{sec:results}
+
+\paragraph{Selected rules.} On the training paths, the best ratchet keeps the full minimum-variance hedge as its core ($\varphi=\RatchetFloor$), triggers at $z<\RatchetZ$ and decays with a half-life of \RatchetHl{} days. Forecast-based sizing did not improve tail protection, so the selected rule runs \RatchetFc{} it. The best switch enters at $z<\SwitchZ$ and exits at $z>\SwitchExit$.
+
+\begin{table}[t]
+\centering\small
+\input{tables/hedging}
+\caption{Hedging a long-BTC spot book on \NTest{} test paths (medians, in \%). ES/Var red.: reduction in daily ES$_{97.5}$ and variance relative to unhedged. Max DD: maximum drawdown. Tail offset: hedge P\&L net of costs as a share of BTC losses on the worst 5\% of days. Carry and Trading: costs in \% of BTC notional a year. Turnover: hedge notional traded per year as a multiple of BTC notional. Time on: share of bars with a hedge.}
+\label{tab:hedge}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/mechanics}
+\caption{Mechanics on the deepest VWAP breakdown of the representative test path. Top: 15-minute close, rolling 24-hour VWAP and the breakdown band (orange dots: trigger bars). Bottom: hedge sizes. The switch hedges late and drops protection as soon as price recovers; the ratchet steps up at the first trigger and decays slowly.}
+\label{fig:mech}
+\end{figure}
+
+\paragraph{Hedging performance.} Table~\ref{tab:hedge} summarises the test results.
+\begin{itemize}
+  \item \emph{Always-on.} The minimum-variance hedge reduces ES by \EsRedAlways\% and variance by \VarRedAlways\%, holding a notional of only \NotionalAlways\% of the BTC position. A volatility index is a partial hedge for a long-BTC book: the simulated correlation between daily returns and \BVIV{} changes is \CorrDaily{} (\CorrDown{} on falling and \CorrUp{} on rising bars), and the variance reduction of a minimum-variance hedge is bounded by the squared correlation \citep{ederington1979hedging}.
+  \item \emph{VWAP-switch.} The switch is the instructive failure. It trades \TurnSwitch{} times the BTC notional per year and reduces ES by only \EsRedSwitch\%: the gate fires on noise as often as on crashes, and each false alarm costs a round trip.
+  \item \emph{VWAP-ratchet.} The ratchet keeps the benefits of the always-on hedge and adds convexity where it matters. It reduces ES by \EsRedRatchet\% and offsets \TailRatchet\% of tail losses (Always-on: \TailAlways\%) at a total cost of \CostRatchet\% a year (Always-on: \CostAlways\%). Paired across test paths, the ratchet's ES reduction exceeds the always-on hedge's by \DEsRatchet{} percentage points (95\% bootstrap CI [\DEsRatchetLo, \DEsRatchetHi]) and is higher on \ShareRatchet\% of paths. The price is a slightly smaller variance reduction (\VarRedRatchet\%): the ratchet deliberately over-hedges after breakdowns.
+  \item \emph{Oracle.} Holding the hedge only in the latent stress regime reduces ES by just \EsRedOracle\%. Most simulated crash days start from calm, so regime \emph{timing} alone is not enough, and the ratchet's floor matters.
+\end{itemize}
+Figure~\ref{fig:mech} shows the mechanism on one episode.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/frontier}
+\caption{Tail protection versus cost on the test paths (medians). Blue: the always-on hedge scaled from 0.5$\times$ to 3$\times$. Dots: every candidate VWAP rule; diamonds: rules selected on the training paths, with interquartile ranges of the ES reduction. Rules above the blue line protect more for the same cost than scaling the static hedge.}
+\label{fig:frontier}
+\end{figure}
+
+\paragraph{Timing versus scaling.} Can the static hedge simply be scaled up instead? Figure~\ref{fig:frontier} answers no. Along the blue frontier, ES reduction peaks between 1$\times$ and 1.5$\times$ and then falls (\EsRedAlwaysTwo\% at 2$\times$, \EsRedAlwaysThree\% at 3$\times$). The extra contracts add volatility-of-volatility risk faster than they add crash convexity. Many ratchet configurations lie above this frontier, so a better position in time beats a bigger position.
+
+\begin{table}[t]
+\centering\small
+\input{tables/robustness}
+\caption{Robustness on fresh simulation paths per scenario (selected rules fixed). ES red.: median reduction in daily ES$_{97.5}$. Ratchet $-$ Always: mean paired difference in percentage points with a 95\% bootstrap CI and the share of paths with a positive difference. Cost: carry premium plus trading costs.}
+\label{tab:robust}
+\end{table}
+
+\paragraph{Robustness.} Table~\ref{tab:robust} varies one assumption at a time.
+\begin{itemize}
+  \item \emph{Costs and carry.} Doubling or halving trading costs, and setting the carry to zero or doubling it, barely moves the ratchet's advantage. The ratchet trades rarely, and the always-on core pays the same carry in both rules.
+  \item \emph{Spot-vol regime.} The advantage is largest under a VIX-like correlation (\RobVixLikeSpotVol{} pp) and smaller under inverse leverage (\RobInverseLeverage{} pp), where rallies lift \BVIV{} and a downside trigger fires less often when it matters.
+  \item \emph{Crash clustering.} When crashes cluster in stress (\RobCrashesClusterInStress{} pp), the signal fires on the same episodes that the always-on hedge already covers.
+  \item \emph{VWAP anchor and book.} A UTC-session anchor gives \RobSessionAnchoredVwap{} pp. Hedging a perpetual instead of spot changes nothing material (\RobPerpetualBtcBook{} pp): BTC funding shifts the book's mean return but not its tail co-movement with \BVIV{}.
+\end{itemize}
+
+\section{Implementation on live data}\label{sec:impl}
+
+The pipeline (\texttt{scripts/run\_paper.py --live}) maps live data into the simulator's schema, so forecasting, signals, hedging and reporting share one code path. It uses the following sources:
+\begin{itemize}
+  \item BTCUSDT 15-minute klines from the Binance bulk archive, whose quote volume over volume gives each bar's exact VWAP, and BTC perpetual funding;
+  \item index, mark and funding of the Bitfinex \BVIV{} perpetual since April 2024;
+  \item \BVIV{} bars from the Volmex API, or DVOL as a proxy before 2024.
+\end{itemize}
+Four practical issues deserve attention. First, the \BVIV{} perpetuals are young and thin, so the costs in Table~\ref{tab:robust} should be stressed further for large books. Second, oracle risk is real on builder-deployed markets: in July 2026 a single erroneous pre-market print triggered large liquidations on another Hyperliquid HIP-3 perpetual. Third, venue mechanics differ: Bitfinex warns that its funding process can briefly pause trading, so a hedge should not depend on a single venue at the moment of a crash. Fourth, the 15-minute boundary itself attracts algorithmic order flow \citep{kim2026quarter}, so hedge orders should be worked inside the bar, for example by VWAP slicing \citep{berkowitz1988total,konishi2002optimal,bialkowski2008improving}, and not sent at the bar close \citep{madhavan2002vwap}.
+
+\paragraph{Limitations.} The evidence is simulation-based. The simulator embeds the stylised facts we calibrate to, including a spot-vol correlation of about \CorrDaily{} and crash dynamics that a 24-hour VWAP can detect. If real BTC crashes arrive without any intraday breakdown first, the ratchet reduces to its always-on core. The robustness grid brackets this risk but cannot remove it, and confirmation on live data is the obvious next step. The forecasting comparison is cleaner on real data too, because in the simulation the index is by construction a near-rational forecast; its ranking nevertheless matches the empirical literature \citep{hoang2020forecasting,bergsli2022forecasting}.
+
+\section{Conclusion}\label{sec:conclusion}
+
+\BVIV{} perpetuals turn BTC implied volatility into a hedging instrument, but a partial and costly one. Three practical lessons follow. Forecast BTC volatility with HAR at short horizons and with the implied index, best combined with HAR, beyond a week. Do not switch a volatility hedge on and off around VWAP: turnover eats the protection. Instead, keep a minimum-variance core and let a 15-minute VWAP breakdown \emph{ratchet} crash protection up quickly and decay slowly. Timing improves tail protection by more than scaling the static hedge at the same cost.
+
+\section*{References}
+\renewcommand{\bibsection}{}
+\setlength{\columnsep}{14pt}
+\begin{multicols}{2}
+\bibliographystyle{plainnat}
+\bibliography{references}
+\end{multicols}
+
+\end{document}
