@@ -223,11 +223,17 @@ def backtest(bars: pd.DataFrame, position: np.ndarray, cfg: HedgeConfig) -> pd.D
     funding = held * np.r_[0.0, bars["bviv_funding"].to_numpy()[:-1]]
     carry = held * np.r_[0.0, bars["bviv_carry"].to_numpy()[:-1]]
     hedge = held * np.r_[0.0, np.diff(mark)] - funding
-    traded = np.abs(np.diff(np.r_[0.0, position]))
+    change = np.diff(np.r_[0.0, position])
+    traded = np.abs(change)
     cost = traded * mark * (cfg.fee_bps + cfg.slippage_bps) / 1e4
+    basis = np.zeros(len(bars))
+    if "bviv_trade_price" in bars:
+        # live data: fills at the perpetual's price, marks at the index -- buying at a premium is a cost
+        basis = np.nan_to_num(change * (bars["bviv_trade_price"].to_numpy() - mark))
     return pd.DataFrame(
-        {"btc": btc, "hedge": hedge, "funding": funding, "carry": carry, "cost": cost, "position": position,
-         "notional": position * mark, "traded_notional": traded * mark, "btc_notional": cfg.qty * s},
+        {"btc": btc, "hedge": hedge, "funding": funding, "carry": carry, "cost": cost + basis, "basis": basis,
+         "position": position, "notional": position * mark, "traded_notional": traded * mark,
+         "btc_notional": cfg.qty * s},
         index=bars.index,
     )
 

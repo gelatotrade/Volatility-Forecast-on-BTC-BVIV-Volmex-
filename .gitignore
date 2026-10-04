@@ -14,3 +14,4 @@ paper/*.fdb_latexmk
 paper/*.synctex.gz
 results/quick/
 results/live_*.csv
+data/*.log

@@ -100,12 +100,24 @@ def fetch_binance_klines(start: str, end: str, symbol: str = "BTCUSDT", market: 
     """15m klines from the monthly bulk archive, ``start``/``end`` as 'YYYY-MM' (inclusive)."""
     base = {"spot": "spot", "perp": "futures/um"}[market]
     frames = []
+    today = pd.Timestamp.now(tz="UTC").floor("1D")
     for month in pd.period_range(start, end, freq="M"):
-        fname = f"{symbol}-{BAR.replace('min', 'm')}-{month.year}-{month.month:02d}.zip"
+        fname = f"{symbol}-15m-{month.year}-{month.month:02d}.zip"
         url = f"https://data.binance.vision/data/{base}/monthly/klines/{symbol}/15m/{fname}"
-        blob = _cached(f"binance_{market}_{fname}", lambda u=url: _get(u))
-        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-            frames.append(parse_binance_klines(zf.read(zf.namelist()[0])))
+        try:
+            blobs = [_cached(f"binance_{market}_{fname}", lambda u=url: _get(u, retries=1))]
+        except Exception:
+            # the monthly file appears a few days after month end: fall back to daily files
+            blobs = []
+            for day in pd.date_range(month.start_time, month.end_time.normalize(), freq="D"):
+                if day.tz_localize("UTC") >= today:
+                    break
+                dname = f"{symbol}-15m-{day:%Y-%m-%d}.zip"
+                durl = f"https://data.binance.vision/data/{base}/daily/klines/{symbol}/15m/{dname}"
+                blobs.append(_cached(f"binance_{market}_{dname}", lambda u=durl: _get(u)))
+        for blob in blobs:
+            with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+                frames.append(parse_binance_klines(zf.read(zf.namelist()[0])))
     return regularise_klines(pd.concat(frames))
 
 
@@ -185,6 +197,110 @@ def fetch_bitfinex_bviv(start: str, end: str) -> pd.DataFrame:
     status15 = status.resample(BAR, label="left", closed="left").last()
     out = pd.DataFrame({"perp_close": candles["close"]}).join(status15, how="outer")
     return out[~out.index.duplicated()].sort_index()
+
+
+STATUS_COLS = {"deriv_price": 2, "index": 3, "next_funding_mts": 7, "accrued": 8, "step": 9,
+               "current_funding": 11, "mark": 14, "open_interest": 17}
+
+
+def parse_bitfinex_status_raw(payload: bytes) -> pd.DataFrame:
+    """Every field of /v2/status/deriv/{key}/hist that the study uses, one row per snapshot."""
+    rows = json.loads(payload)
+    data = {k: [r[i] if len(r) > i else None for r in rows] for k, i in STATUS_COLS.items()}
+    df = pd.DataFrame(data, index=pd.to_datetime([r[0] for r in rows], unit="ms", utc=True)).astype(float)
+    return df.sort_index()
+
+
+def fetch_bitfinex_status(symbol: str, start: str, end: str, pause: float = 0.7) -> pd.DataFrame:
+    """Full derivatives-status history (about one snapshot a minute), cached per month as csv.gz."""
+    parts = []
+    for month in pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M"):
+        path = RAW / f"bitfinex_status_{symbol.replace(':', '_')}_{month}.csv.gz"
+        m0 = max(month.start_time.tz_localize("UTC"), pd.Timestamp(start, tz="UTC"))
+        m1 = min((month + 1).start_time.tz_localize("UTC"), pd.Timestamp(end, tz="UTC"))
+        complete = (month + 1).start_time.tz_localize("UTC") <= pd.Timestamp.now(tz="UTC")
+        if path.exists():
+            parts.append(pd.read_csv(path, index_col=0, parse_dates=True))
+            continue
+        t0, t1, chunks = int(m0.timestamp() * 1000), int(m1.timestamp() * 1000), []
+        while t0 < t1:
+            url = f"https://api-pub.bitfinex.com/v2/status/deriv/{symbol}/hist?start={t0}&end={t1 - 1}&limit=5000&sort=1"
+            df = parse_bitfinex_status_raw(_get(url))
+            time.sleep(pause)                                   # public rate limit
+            if df.empty:
+                break
+            chunks.append(df)
+            t0 = int(df.index[-1].timestamp() * 1000) + 1
+        if not chunks:
+            continue
+        month_df = pd.concat(chunks)
+        if complete:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            month_df.to_csv(path, compression="gzip")
+        parts.append(month_df)
+    out = pd.concat(parts).sort_index()
+    out.index = pd.to_datetime(out.index, utc=True)
+    return out
+
+
+def bitfinex_funding_events(status: pd.DataFrame) -> pd.DataFrame:
+    """Funding settlements: event time, the rate applied (CURRENT_FUNDING just after the event),
+    the premium accrued just before it, and the mark price at settlement.
+
+    Bitfinex applies sign(a) * min(max(|a| - 0.05%, 0), 0.25%) per 8h to the accrued premium a.
+    """
+    nxt = pd.to_datetime(status["next_funding_mts"], unit="ms", utc=True)
+    snap = status.assign(_event=nxt.to_numpy())
+    snap = snap[snap.index < snap["_event"]]
+    before = snap.groupby("_event")["accrued"].last()               # last snapshot of each funding period
+    events = before.index
+    pos = status.index.searchsorted(events)                         # first snapshot at or after the event
+    ok = pos < len(status)
+    events, pos, accrued = events[ok], pos[ok], before.to_numpy()[ok]
+    gap = status.index[pos] - events
+    keep = np.asarray(gap <= pd.Timedelta("30min"))
+    out = pd.DataFrame({"rate": status["current_funding"].to_numpy()[pos][keep],
+                        "accrued": accrued[keep], "mark": status["mark"].to_numpy()[pos][keep]},
+                       index=pd.DatetimeIndex(events[keep], name="time"))
+    return out
+
+
+def fetch_volmex_public(start: str, end: str, symbol: str = "BVIV") -> pd.Series:
+    """Official Volmex index at 15m from the public history endpoint (no key), cached per month."""
+    parts = []
+    now = pd.Timestamp.now(tz="UTC")
+    for month in pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M"):
+        t0 = int(month.start_time.tz_localize("UTC").timestamp())
+        t1 = int(min((month + 1).start_time.tz_localize("UTC"), now).timestamp())
+        url = f"https://rest-v1.volmex.finance/public/iv/history?symbol={symbol}&resolution=15&from={t0}&to={t1}"
+        complete = (month + 1).start_time.tz_localize("UTC") <= now
+        blob = _cached(f"volmex_public_{symbol}_15_{month}.json", lambda u=url: _get(u)) if complete else _get(url)
+        parts.append(parse_volmex_history(blob))
+    s = pd.concat(parts).sort_index()
+    return s[~s.index.duplicated()]
+
+
+def parse_deribit_funding(payload: bytes) -> pd.Series:
+    rows = json.loads(payload)["result"]
+    return pd.Series([float(r["interest_1h"]) for r in rows],
+                     index=pd.to_datetime([int(r["timestamp"]) for r in rows], unit="ms", utc=True), dtype=float).sort_index()
+
+
+def fetch_deribit_funding(start: str, end: str, instrument: str = "BTC-PERPETUAL") -> pd.Series:
+    """Hourly realised funding of the Deribit BTC perpetual (fraction of notional per hour)."""
+    parts = []
+    for month in pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M"):
+        for half in (0, 1):                                    # the endpoint caps the number of rows
+            a = month.start_time + pd.Timedelta(days=15 * half)
+            b = month.start_time + pd.Timedelta(days=15) if half == 0 else (month + 1).start_time
+            t0, t1 = int(a.tz_localize("UTC").timestamp() * 1000), int(b.tz_localize("UTC").timestamp() * 1000)
+            url = (f"https://www.deribit.com/api/v2/public/get_funding_rate_history?instrument_name={instrument}"
+                   f"&start_timestamp={t0}&end_timestamp={t1}")
+            complete = b.tz_localize("UTC") <= pd.Timestamp.now(tz="UTC")
+            blob = _cached(f"deribit_funding_{instrument}_{t0}.json", lambda u=url: _get(u)) if complete else _get(url)
+            parts.append(parse_deribit_funding(blob))
+    s = pd.concat(parts).sort_index()
+    return s[~s.index.duplicated()]
 
 
 # --------------------------------------------------------------------------- Hyperliquid BVIV perpetual
