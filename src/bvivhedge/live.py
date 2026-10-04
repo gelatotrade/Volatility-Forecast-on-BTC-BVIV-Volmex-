@@ -4,8 +4,12 @@ Panel conventions (same schema as the simulator, so every module is shared):
 
 * bars are indexed by their open time; ``close`` is the BTC price at open + 15 minutes;
 * ``bviv`` is the official Volmex index (signals and forecasts);
-* ``bviv_mark`` is the Bitfinex mark price of the BVIV perpetual (index x USD/USDt) once it trades,
-  the Volmex index before; ``bviv_mid`` is the perpetual's order-book mid (fills pay its premium over the mark);
+* ``bviv_mark`` is the Bitfinex mark price of the BVIV perpetual (index x USD/USDt) once it is live
+  (first snapshot with open interest), the Volmex index before and across status gaps of more than an hour;
+  hedges are marked and, by default, filled at it;
+* ``bviv_mid`` is the perpetual's quoted order-book mid (Bitfinex DERIV_PRICE).  It is not executable as such:
+  dust orders often sit at the top of the book and 96% of bars see no trade.  Copy it to ``bviv_fill`` to
+  price fills at it (a sensitivity);
 * ``bviv_funding[t]`` is the funding a long contract pays over bar t+1 -- the Bitfinex settlement
   at 00/08/16 UTC, rate x mark, booked on the bar whose holding period ends at the settlement;
 * ``bviv_carry`` equals the funding: on live data all funding is a cost of the hedge.
@@ -55,27 +59,32 @@ def build_panel(start: str = "2023-01-01", end: str = "2026-10-04", perp_start: 
     index = data.fetch_volmex_public(start, end)
     status = data.fetch_bitfinex_status(BVIV_PERP, "2024-04-01", end)
     events = data.bitfinex_funding_events(status)
-    first_trade = status.index[0].ceil("1D") if perp_start is None else pd.Timestamp(perp_start, tz="UTC")
+    # the market is live from its first snapshot with open interest; earlier snapshots are placeholders
+    first_live = status.index[status["open_interest"] > 0][0].floor("15min")
+    if perp_start is not None:
+        first_live = max(first_live, pd.Timestamp(perp_start, tz="UTC"))
 
-    bars = klines.loc[start:end].copy()
+    bars = klines.loc[pd.Timestamp(start, tz="UTC"): pd.Timestamp(end, tz="UTC") - pd.Timedelta("15min")].copy()  # end exclusive
     bars = bars.loc[: min(bars.index[-1], index.index[-1])]
     bars["bviv"] = index.reindex(bars.index).ffill()
-    st = status_to_bars(status, bars.index).ffill()
-    live = bars.index >= first_trade
+    st = status_to_bars(status, bars.index).ffill(limit=4)       # never carry a snapshot for more than an hour
+    live = (bars.index >= first_live) & st["mark"].notna().to_numpy()
     bars["bviv_mark"] = np.where(live, st["mark"], bars["bviv"])
-    bars["bviv_mark"] = pd.Series(bars["bviv_mark"], index=bars.index).fillna(bars["bviv"])
     bars["bviv_mid"] = np.where(live, st["deriv_price"], bars["bviv_mark"])
-    bars["open_interest"] = st["open_interest"]
-    bars["bviv_funding"] = funding_per_bar(events, bars.index).where(live, 0.0)
+    bars["open_interest"] = st["open_interest"].where(live)
+    bars["bviv_funding"] = funding_per_bar(events, bars.index).where(bars.index >= first_live, 0.0)
     bars["bviv_carry"] = bars["bviv_funding"]
     try:
         btc_events = data.bitfinex_funding_events(data.fetch_bitfinex_status(BTC_PERP, "2024-04-01", end))
-        bars["btc_funding"] = btc_perp_funding(btc_events, bars.index)
-    except Exception:
+        bars["btc_funding"], btc_source = btc_perp_funding(btc_events, bars.index), "Bitfinex tBTCF0:USTF0"
+    except Exception as err:                                     # recorded in the result, never silent
+        print(f"warning: Bitfinex BTC-perp status unavailable ({err}); using Deribit funding instead")
         hourly = data.fetch_deribit_funding(start, end)
         bars["btc_funding"] = hourly.reindex(bars.index, method="ffill").fillna(0.0) * 24 * 365
+        btc_source = "Deribit BTC-PERPETUAL"
     bars = bars.dropna(subset=["close", "bviv", "bviv_mark"])
-    return {"bars": bars, "events": events, "status": status, "perp_start": first_trade}
+    return {"bars": bars, "events": events.loc[first_live:], "status": status.loc[first_live:],
+            "first_live": first_live, "perp_start": first_live.floor("1D"), "btc_funding_source": btc_source}
 
 
 def funding_summary(events: pd.DataFrame, start=None, end=None) -> dict[str, float]:

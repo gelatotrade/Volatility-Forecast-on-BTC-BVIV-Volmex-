@@ -12,13 +12,15 @@ import pandas as pd
 def _fmt(x, nd=1, signed=False):
     if x is None or (isinstance(x, float) and not np.isfinite(x)):
         return "--"
-    s = f"{x:+.{nd}f}" if signed else f"{x:.{nd}f}"
+    if float(f"{x:.{nd}f}") == 0:
+        x = 0.0                                           # never print a negative zero
+    s = f"{x:+.{nd}f}" if signed and x != 0 else f"{x:.{nd}f}"
     return tex_minus(s)
 
 
 def tex_minus(s: str) -> str:
-    """A typographic minus that works in text and in math mode."""
-    return "\\ensuremath{-}" + s[1:] if s.startswith("-") else s
+    """A typographic minus, in text and math mode, for every negative number in ``s`` (e.g. '[-0.22, +4.89]')."""
+    return re.sub(r"(?<![\w.])-(?=\d)", lambda _: "\\ensuremath{-}", s)
 
 
 def macro_name(key: str) -> str:
@@ -46,24 +48,6 @@ def table_hedging(med: pd.DataFrame, order: list[tuple[str, str]], cols: list[tu
     Path(path).write_text(
         f"\\begin{{tabular}}{{@{{}}l{'r' * len(cols)}@{{}}}}\n\\toprule\nRule & {head} \\\\\n\\midrule\n"
         + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n")
-
-
-def table_robustness(rows: list[dict], path: str | Path):
-    labels = {"Trading costs x2": "Trading costs $\\times$2", "Trading costs x0.5": "Trading costs $\\times$0.5",
-              "Funding carry 0": "Carry 0 vol pts", "Funding carry 12": "Carry 12 vol pts",
-              "Funding carry 24": "Carry 24 vol pts (live avg.)"}
-    body = []
-    for r in rows:
-        body.append(
-            f"{labels.get(r['scenario'], r['scenario'])} & {_fmt(r['es_always'])} & {_fmt(r['es_ratchet'])} & "
-            f"{_fmt(r['d_mean'], 2, True)} [{_fmt(r['d_lo'], 2, True)}, {_fmt(r['d_hi'], 2, True)}] & "
-            f"{r['share']:.0f}\\% & {_fmt(r['es_switch'])} & {_fmt(r['cost_always'], 2)} & {_fmt(r['cost_ratchet'], 2)} \\\\")
-    Path(path).write_text(
-        "\\begin{tabular}{@{}lrrcrrrr@{}}\n\\toprule\n"
-        " & \\multicolumn{2}{c}{ES red. (\\%)} & Ratchet $-$ Always & & Switch & \\multicolumn{2}{c}{Cost (\\% p.a.)} \\\\\n"
-        "\\cmidrule(lr){2-3}\\cmidrule(lr){7-8}\n"
-        "Scenario & Always & Ratchet & mean [95\\% CI] & $>0$ & ES red. & Always & Ratchet \\\\\n\\midrule\n"
-        + "\n".join(body) + "\n\\bottomrule\n\\end{tabular}\n")
 
 
 # --------------------------------------------------------------------------- live data

@@ -76,13 +76,15 @@ def test_execution_delay_shifts_positions(bars):
 
 
 def test_placebo_preserves_trigger_count(bars):
-    from bvivhedge.hedge import target_hedge
-    cfg = HedgeConfig()
+    from bvivhedge.hedge import ratchet_trigger, target_hedge
+    cfg = HedgeConfig(placebo_start_days=40)
     sig = build_signals(bars, cfg)
+    z = sig["z"].to_numpy()
     real = Rule("r", "ratchet", z_enter=-1.0, halflife_days=1.0)
     fake = Rule("p", "ratchet", z_enter=-1.0, halflife_days=1.0, placebo_shift_days=17.0)
-    h_real, _ = target_hedge(bars, sig, real, cfg)
-    h_fake, _ = target_hedge(bars, sig, fake, cfg)
-    assert not np.allclose(h_real, h_fake)
-    z = np.nan_to_num(sig["z"].to_numpy(), nan=0.0) < -1.0
-    assert np.roll(z, 17 * 96).sum() == z.sum()
+    t_real, t_fake = ratchet_trigger(z, real, cfg), ratchet_trigger(z, fake, cfg)
+    i0 = 40 * 96
+    assert t_real[i0:].sum() == t_fake[i0:].sum() > 0               # the evaluated segment keeps every trigger
+    assert (t_real[:i0] == t_fake[:i0]).all()                        # nothing leaks in from the warm-up
+    assert not (t_real[i0:] == t_fake[i0:]).all()
+    assert not np.allclose(target_hedge(bars, sig, real, cfg)[0], target_hedge(bars, sig, fake, cfg)[0])

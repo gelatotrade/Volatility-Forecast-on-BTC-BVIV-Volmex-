@@ -15,3 +15,6 @@ paper/*.synctex.gz
 results/quick/
 results/live_*.csv
 data/*.log
+*.egg-info/
+build/
+dist/

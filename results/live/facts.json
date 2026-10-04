@@ -4,21 +4,26 @@
     "start": "2023-01-01",
     "end": "2026-10-03",
     "rv": 46.58934287158873,
-    "iv": 51.94926139218538,
+    "iv": 51.949261346401975,
     "iv_min": 34.69836122101506,
     "iv_max": 88.54173621479505,
-    "iv_p05": 37.65915889060516,
-    "iv_p95": 68.48019799879359,
+    "iv_max_15m": 96.34566449360675,
     "vrp": 6.75082784530348,
     "iv_above_rv": 75.33532041728763,
-    "vrp_var": 0.06419253666191933,
-    "corr_15m": -0.10451585296734064,
-    "corr_down": -0.23659821775403,
-    "corr_up": 0.028313068943667957,
-    "corr_daily": -0.10199653954133565,
+    "corr_15m": -0.10451609126257108,
+    "corr_down": -0.2365983114532709,
+    "corr_up": 0.028312688174439472,
+    "corr_daily": -0.10199649615613174,
     "kurt_daily": 3.4482046581734975,
     "worst_day": 15.10256005239139,
-    "ac1_15m_iv": 0.19853726656147527,
+    "ac1_15m_iv": 0.19853692334847756,
+    "lag_corr": [
+      -0.2099946278356949,
+      -0.1062311220103311,
+      -0.037870596944450614,
+      -0.0033460235104145423
+    ],
+    "lag_share_after": 41.24788414669249,
     "by_year": {
       "2023": {
         "rv": 43.24300144890166,
@@ -40,47 +45,56 @@
       },
       "2026": {
         "rv": 44.25812895636235,
-        "iv": 45.17352948058158,
-        "corr_daily": -0.5891229189879075,
+        "iv": 45.17352925299163,
+        "corr_daily": -0.5891226183730816,
         "days": 276
       }
     }
   },
   "perp": {
     "first_day": "2024-04-03",
+    "first_live": "2024-04-03 09:00:00+00:00",
     "days": 914,
     "days_traded": 576,
     "median_daily_contracts": 1.3,
     "median_daily_usd": 70.629325,
     "mean_daily_usd": 7299.758284561139,
-    "median_oi_contracts": 84.272499995,
     "max_oi_contracts": 4012.79,
-    "median_premium_pct": 0.04720031853224782,
-    "mean_premium_pct": 0.2490769831737095,
-    "share_premium_positive": 61.33410831509847,
-    "mark_vs_volmex_pct_median": 0.00016123921975363942,
-    "mark_vs_volmex_pct_p95": 0.14440871761998308
+    "bars": 87708,
+    "bars_traded": 3879,
+    "median_premium_pct": 0.04708353416336131,
+    "mean_premium_pct": 0.23771213914737613,
+    "share_mid_beyond_5pct": 1.4479865006612853,
+    "max_mid_premium_pct": 276.26530529984717,
+    "mark_vs_volmex_pct_median": 0.00013635981986892531,
+    "mark_vs_volmex_pct_p95": 0.14404645424872733
   },
   "funding": {
-    "n": 2741,
-    "mean_8h": 0.0004670584093396572,
-    "median_8h": 9.72e-05,
-    "share_positive": 0.5158701203940168,
-    "share_at_cap": 0.40788033564392556,
+    "n": 2740,
+    "mean_8h": 0.00046722886861313875,
+    "median_8h": 9.899e-05,
+    "share_positive": 0.516058394160584,
+    "share_at_cap": 0.40802919708029195,
     "cap_8h": 0.0025,
-    "annual_pct_notional": 51.14289582269246,
-    "annual_vol_points": 23.87953704218884
+    "annual_pct_notional": 51.161561113138696,
+    "annual_vol_points": 23.888252201693284
+  },
+  "funding_fit": {
+    "corr": 0.9999999877434483,
+    "max_err_bp": 0.0492,
+    "share_exact": 76.71532846715328,
+    "n": 2740
   },
   "funding_by_year": {
     "2024": {
-      "n": 818,
-      "mean_8h": 0.0007412447677261615,
-      "median_8h": 0.000448895,
-      "share_positive": 0.6503667481662592,
-      "share_at_cap": 0.3606356968215159,
+      "n": 817,
+      "mean_8h": 0.0007421520440636475,
+      "median_8h": 0.00045258,
+      "share_positive": 0.6511627906976745,
+      "share_at_cap": 0.36107711138310894,
       "cap_8h": 0.0025,
-      "annual_pct_notional": 81.16630206601468,
-      "annual_vol_points": 46.262906377387814
+      "annual_pct_notional": 81.2656488249694,
+      "annual_vol_points": 46.31953172179097
     },
     "2025": {
       "n": 1095,
@@ -103,43 +117,144 @@
       "annual_vol_points": -11.713817892380895
     }
   },
+  "btc_funding_source": "Bitfinex tBTCF0:USTF0",
+  "baseline": {
+    "exec_delay_bars": 1,
+    "fills": "mark",
+    "fee_bps": 6.0,
+    "slippage_bps": 10.0
+  },
   "forecast_n": {
     "1": 1006,
     "7": 1000,
     "30": 977
   },
   "placebo": {
-    "n": 194,
-    "real": 20.921348226346982,
-    "mean": 20.844120448130017,
-    "share_beaten": 50.0,
-    "p05": 20.3662061872847,
-    "p95": 21.26087031228601
+    "n": 129,
+    "real": 20.267874227697412,
+    "mean": 19.942403025314402,
+    "share_beaten": 75.96899224806202,
+    "p05": 18.91122967745831,
+    "p95": 20.43373146067034,
+    "min": 18.56612425166918,
+    "max": 20.644450877260667,
+    "step_days": 7
+  },
+  "grid": {
+    "shifts": 64,
+    "step_days": 14
   },
   "capacity": {
-    "median_contracts_per_btc": 247.6659240372309,
-    "median_oi": 86.61999999,
-    "share_bars_position_above_oi": 60.88110493127991,
-    "max_notional_pct": 58.868448089623435
+    "share_held": 67.41657549234135,
+    "median_contracts_per_btc": 247.66592407702305,
+    "median_oi": 86.71999999,
+    "share_above_oi_when_held": 60.87890162659362,
+    "share_above_oi_all": 41.05660463419084,
+    "max_notional_pct": 63.94667115200635,
+    "max_notional_pct_onehalf": 71.86374025068812,
+    "always|1|trades_on_dead_days": 29.71698113207547,
+    "ratchet|-1.5|4|1|1|trades_on_dead_days": 29.567307692307693,
+    "switch|-1|0.5|trades_on_dead_days": 34.6551724137931
   },
   "book": {
     "time": "2026-10-04",
-    "mid": 38.056,
-    "spread_pct": 0.3416018499054093,
-    "best_ask_contracts": 384.25,
-    "best_ask_pct": 0.1708009249527187,
-    "ask_contracts_2_5pct": 1667.4,
-    "btc_capacity_2_5pct": 6.732456257282067,
-    "fill_cost_one_btc_pct": 0.1708009249527187
+    "mid": 37.9315,
+    "top_spread_pct": 0.34272306658055324,
+    "buy_cost_pct": 0.4995847778231921,
+    "sell_cost_pct": 0.4992734201333393,
+    "ask_depth_2_5pct": 1667.4,
+    "bid_depth_2_5pct": 939.6999999999998,
+    "btc_capacity_2_5pct": 3.7942240277986614
   },
   "concentration": {
-    "hedge_total_pct": 6.1673442863626695,
-    "top10_pct": 52.65463101455875,
-    "ex_top10_pct": -46.48728672819608,
+    "hedge_total_pct": 5.3304274956768625,
+    "top10_pct": 51.31709758847256,
+    "ex_top10_pct": -45.9866700927957,
     "worst10_btc_pct": -74.00922458465787,
-    "worst10_hedge_pct": 38.12710505121936,
+    "worst10_hedge_pct": 35.77135604048872,
     "best_day": "2026-02-05",
-    "best_day_pct": 21.23590501383113
+    "best_day_pct": 20.24435087247639,
+    "es_ex_best_day": 11.919879845680992,
+    "es_ex_best5": 9.03791764741787,
+    "es_ratchet_ex_best_day": 14.458045432205957,
+    "tail_days": 23,
+    "tail_days_flat": 8,
+    "best5": [
+      {
+        "day": "2026-02-05",
+        "max_contracts": 558.2403471190783,
+        "median_oi": 328.2
+      },
+      {
+        "day": "2026-01-31",
+        "max_contracts": 558.2403471190783,
+        "median_oi": 24.5
+      },
+      {
+        "day": "2026-06-02",
+        "max_contracts": 487.0717850523854,
+        "median_oi": 24.63850103
+      },
+      {
+        "day": "2026-02-03",
+        "max_contracts": 558.2403471190783,
+        "median_oi": 329.7
+      },
+      {
+        "day": "2026-08-19",
+        "max_contracts": 515.3803925158753,
+        "median_oi": 122.6
+      }
+    ],
+    "best_day_traded_contracts": 353.1433291554776,
+    "best_day_market_contracts": 18.30178563
+  },
+  "es_by_year": {
+    "2024": {
+      "always|1": 6.298793746739051,
+      "ratchet|-1.5|4|1|1": 8.487534201380953
+    },
+    "2025": {
+      "always|1": 10.031091566945294,
+      "ratchet|-1.5|4|1|1": 12.293910943678299
+    },
+    "2026": {
+      "always|1": 52.34411747541401,
+      "ratchet|-1.5|4|1|1": 52.000517111385236
+    }
+  },
+  "es_horizon": {
+    "1": {
+      "always|1": 17.902095484410076,
+      "ratchet|-1.5|4|1|1": 20.267874227697412,
+      "switch|-1|0.5": 18.822500547625953
+    },
+    "7": {
+      "always|1": 22.157747958379602,
+      "ratchet|-1.5|4|1|1": 24.556974319790626,
+      "switch|-1|0.5": 23.276781484861253
+    },
+    "14": {
+      "always|1": 32.41157838635148,
+      "ratchet|-1.5|4|1|1": 33.589816027627094,
+      "switch|-1|0.5": 29.501846215336858
+    }
+  },
+  "episode": {
+    "trigger_close": "15:15",
+    "iv_midnight": 57.003581169796355,
+    "iv_hour_before": 61.10780902269759,
+    "iv_trigger": 66.6112878090141,
+    "iv_after_max": 77.15903617690533,
+    "iv_after_time": "15:45",
+    "iv_peak": 96.34566449360675,
+    "iv_peak_time": "22:00",
+    "btc_day_pct": -14.017431361060218,
+    "contracts_open_min": 558.2403471190783,
+    "contracts_open_max": 608.6288414673148,
+    "contracts_close_always": 205.09701796360065,
+    "ratchet_over_always_min": 0.0,
+    "ratchet_over_always_max": 20.242760532828207
   },
   "eval_days": 914,
   "eval_start": "2024-04-03",
@@ -151,9 +266,5 @@
       10000,
       10048
     ]
-  },
-  "costs": {
-    "fee_bps": 6.0,
-    "slippage_bps": 10.0
   }
 }

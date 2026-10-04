@@ -1,6 +1,6 @@
 """Live market data: BTC 15m klines, BTC perp funding, the BVIV index and its perpetual.
 
-Sources (all public; only Volmex history needs a free API key):
+Sources (all public; the study needs no key):
 
 * Binance bulk archive ``data.binance.vision`` -- BTCUSDT 15m klines (spot or USD-M);
   ``quote_volume / volume`` is each bar's exact VWAP.
@@ -10,13 +10,15 @@ Sources (all public; only Volmex history needs a free API key):
 * Hyperliquid ``api.hyperliquid.xyz/info`` -- the HIP-3 BVIV perpetual ``mkts:BVIV``
   (listed September 2026): 15m candles and hourly funding.  The public API keeps
   only the latest 5000 candles (about 52 days of 15m bars).
-* Volmex REST API ``rest-v1.volmex.finance/v2/history`` -- BVIV bars at 1-60 minute and
-  daily resolution (historical ranges need an API key, read from ``VOLMEX_API_KEY``).
+* Volmex public history ``rest-v1.volmex.finance/public/iv/history`` -- the official BVIV index
+  at 15 minutes (used by the study, no key).  The keyed ``/v2/history`` loader
+  (``VOLMEX_API_KEY``) is optional.
 * Deribit -- the DVOL index, a close substitute for BVIV before the perpetual existed.
 * Any CSV export of BVIV (e.g. from a charting platform) via :func:`load_index_csv`.
 
 Parsers are separated from fetchers so they can be tested offline.  Every
-fetch is cached under ``data/raw`` so a rerun is free.
+fetch of a window that has already ended is cached under ``data/raw`` (a partial month
+under a name that carries its end), so a rerun with the same dates is free and offline.
 """
 
 from __future__ import annotations
@@ -178,16 +180,24 @@ def parse_bitfinex_status(payload: bytes) -> pd.DataFrame:
 def _bitfinex_paged(path: str, start: str, end: str, parser, limit: int) -> pd.DataFrame:
     t0 = int(pd.Timestamp(start, tz="UTC").timestamp() * 1000)
     t1 = int(pd.Timestamp(end, tz="UTC").timestamp() * 1000)
+    now = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)     # only a window that has ended is cached
     parts = []
     while t0 < t1:
         url = f"https://api-pub.bitfinex.com/v2/{path}?start={t0}&end={t1}&limit={limit}&sort=1"
-        df = parser(_cached(f"bitfinex_{path.replace('/', '_')}_{t0}.json", lambda u=url: _get(u)))
+        name = f"bitfinex_{path.replace('/', '_').replace(':', '_')}_{t0}_{t1}.json"
+        df = parser(_cached(name, lambda u=url: _get(u)) if t1 <= now else _get(url))
         if df.empty:
             break
         parts.append(df)
         t0 = int(df.index[-1].timestamp() * 1000) + 1
         time.sleep(1.0)  # public rate limit
     return pd.concat(parts).sort_index() if parts else pd.DataFrame()
+
+
+def fetch_bitfinex_candles(symbol: str, timeframe: str, start: str, end: str) -> pd.DataFrame:
+    """Trade candles (only intervals with at least one trade), ``end`` exclusive."""
+    end_ms = pd.Timestamp(end, tz="UTC") - pd.Timedelta("1ms")
+    return _bitfinex_paged(f"candles/trade:{timeframe}:{symbol}/hist", start, str(end_ms), parse_bitfinex_candles, 10_000)
 
 
 def fetch_bitfinex_bviv(start: str, end: str) -> pd.DataFrame:
@@ -215,10 +225,11 @@ def fetch_bitfinex_status(symbol: str, start: str, end: str, pause: float = 0.7)
     """Full derivatives-status history (about one snapshot a minute), cached per month as csv.gz."""
     parts = []
     for month in pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M"):
-        path = RAW / f"bitfinex_status_{symbol.replace(':', '_')}_{month}.csv.gz"
         m0 = max(month.start_time.tz_localize("UTC"), pd.Timestamp(start, tz="UTC"))
         m1 = min((month + 1).start_time.tz_localize("UTC"), pd.Timestamp(end, tz="UTC"))
-        complete = (month + 1).start_time.tz_localize("UTC") <= pd.Timestamp.now(tz="UTC")
+        partial = "" if m1 == (month + 1).start_time.tz_localize("UTC") else f"_to_{m1:%Y-%m-%d}"
+        path = RAW / f"bitfinex_status_{symbol.replace(':', '_')}_{month}{partial}.csv.gz"
+        complete = m1 <= pd.Timestamp.now(tz="UTC")             # the window has ended: its history is final
         if path.exists():
             parts.append(pd.read_csv(path, index_col=0, parse_dates=True))
             continue
@@ -270,11 +281,12 @@ def fetch_volmex_public(start: str, end: str, symbol: str = "BVIV") -> pd.Series
     parts = []
     now = pd.Timestamp.now(tz="UTC")
     for month in pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M"):
-        t0 = int(month.start_time.tz_localize("UTC").timestamp())
-        t1 = int(min((month + 1).start_time.tz_localize("UTC"), now).timestamp())
+        m1 = min((month + 1).start_time.tz_localize("UTC"), pd.Timestamp(end, tz="UTC"))
+        t0, t1 = int(month.start_time.tz_localize("UTC").timestamp()), int(min(m1, now).timestamp())
         url = f"https://rest-v1.volmex.finance/public/iv/history?symbol={symbol}&resolution=15&from={t0}&to={t1}"
-        complete = (month + 1).start_time.tz_localize("UTC") <= now
-        blob = _cached(f"volmex_public_{symbol}_15_{month}.json", lambda u=url: _get(u)) if complete else _get(url)
+        partial = "" if m1 == (month + 1).start_time.tz_localize("UTC") else f"_to_{m1:%Y-%m-%d}"
+        name = f"volmex_public_{symbol}_15_{month}{partial}.json"
+        blob = _cached(name, lambda u=url: _get(u)) if m1 <= now else _get(url)
         parts.append(parse_volmex_history(blob))
     s = pd.concat(parts).sort_index()
     return s[~s.index.duplicated()]

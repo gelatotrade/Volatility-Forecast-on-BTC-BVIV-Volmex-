@@ -47,6 +47,8 @@ class HedgeConfig:
     warmup_days: int = 30               # no hedging before estimators have data
     cheapness_lookback_days: int = 180
     exec_delay: int = 0                 # bars between decision and execution (live-data realism)
+    placebo_start_days: int | None = None  # placebo shifts are circular from this day on (default: warm-up end),
+                                           # so the evaluation window keeps the real number of triggers
 
     def with_(self, **changes) -> "HedgeConfig":
         return replace(self, **changes)
@@ -159,6 +161,20 @@ def build_signals(bars: pd.DataFrame, cfg: HedgeConfig, daily_rv_forecast: pd.Se
     return out
 
 
+def ratchet_trigger(z: np.ndarray, rule: Rule, cfg: HedgeConfig) -> np.ndarray:
+    """Breakdown bars of a ratchet; for a placebo, the same series circularly shifted.
+
+    The shift is circular within the evaluated segment (from ``placebo_start_days``), so the placebo
+    keeps the number, clustering and hour-of-week profile of the real triggers there and only their
+    link to the market is broken.
+    """
+    trigger = np.nan_to_num(z, nan=0.0) < rule.z_enter
+    if rule.placebo_shift_days:
+        i0 = (cfg.warmup_days if cfg.placebo_start_days is None else cfg.placebo_start_days) * BARS_PER_DAY
+        trigger[i0:] = np.roll(trigger[i0:], int(rule.placebo_shift_days * BARS_PER_DAY))
+    return trigger
+
+
 def target_hedge(bars: pd.DataFrame, sig: pd.DataFrame, rule: Rule, cfg: HedgeConfig) -> tuple[np.ndarray, np.ndarray]:
     """Target contracts per bar and the bars where a discrete switch forces a trade."""
     n = len(bars)
@@ -176,11 +192,7 @@ def target_hedge(bars: pd.DataFrame, sig: pd.DataFrame, rule: Rule, cfg: HedgeCo
         if rule.use_forecast:
             lo, hi = rule.size_bounds
             size = np.clip(np.exp(rule.size_gamma * sig["cheapness"].to_numpy()), lo, hi)
-        trigger = np.nan_to_num(z, nan=0.0) < rule.z_enter
-        if rule.placebo_shift_days:
-            # same number and clustering of triggers, timing scrambled: isolates the VWAP information
-            trigger = np.roll(trigger, int(rule.placebo_shift_days * BARS_PER_DAY))
-        overlay = ratchet(trigger, rule.halflife_days * BARS_PER_DAY)
+        overlay = ratchet(ratchet_trigger(z, rule, cfg), rule.halflife_days * BARS_PER_DAY)
         core = rule.floor * mv_all
         h = core + overlay * np.maximum(mv_down * size - core, 0.0)
     elif rule.kind == "oracle":
@@ -228,9 +240,9 @@ def backtest(bars: pd.DataFrame, position: np.ndarray, cfg: HedgeConfig) -> pd.D
     traded = np.abs(change)
     cost = traded * mark * (cfg.fee_bps + cfg.slippage_bps) / 1e4
     basis = np.zeros(len(bars))
-    if "bviv_mid" in bars:
-        # live data: fills at the perpetual's mid, marks at the index -- buying at a premium is a cost
-        basis = np.nan_to_num(change * (bars["bviv_mid"].to_numpy() - mark))
+    if "bviv_fill" in bars:
+        # fills at a quoted price other than the mark (e.g. the order-book mid): buying above the mark is a cost
+        basis = np.nan_to_num(change * (bars["bviv_fill"].to_numpy() - mark))
     return pd.DataFrame(
         {"btc": btc, "hedge": hedge, "funding": funding, "carry": carry, "cost": cost + basis, "basis": basis,
          "position": position, "notional": position * mark, "traded_notional": traded * mark,
