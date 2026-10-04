@@ -13,21 +13,8 @@ The paper's tables, figures and the result macros used in its text are generated
 
 ## Key results
 
-These are out-of-sample results on 200 simulated test paths. Rules were selected on 48 separate training paths. ES = expected shortfall (97.5%) of daily returns, net of carry and trading costs.
-
-| Rule | ES reduction | Variance reduction | Hedge cost (% p.a.) | Turnover |
-|---|---|---|---|---|
-| Always-on minimum-variance hedge | 4.2% | 4.1% | 0.88 | 0.9× |
-| Always-on, scaled 1.5× | 4.9% | 3.1% | 1.32 | 1.3× |
-| VWAP-switch (on below band, off above VWAP) | 2.8% | 1.9% | 4.32 | 24.6× |
-| **VWAP-ratchet** (MV core + breakdown overlay) | **5.0%** | **3.8%** | **1.21** | 1.4× |
-| Ratchet with placebo timing | 5.0% | 3.8% | 1.21 | 1.4× |
-
-1. **Forecasting.** HAR-type models win at 1 day: HAR-IV is marginally ahead of HAR, and implied volatility alone is 18% worse in QLIKE. Implied volatility wins at 30 days (QLIKE 0.81 × HAR). HAR-IV is robust across horizons.
-2. **BVIV hedges are partial.** The spot-vol correlation is weak (−0.21 daily) and changes sign by regime. The minimum-variance hedge cuts ES by about 4% for under 1% of notional a year.
-3. **Naive VWAP switching fails.** It turns over the BTC notional 25× a year, and its ES reduction falls short of the always-on hedge by 1.7 pp.
-4. **The ratchet's gain over the MV hedge (+0.61 pp ES, 95% CI [+0.41, +0.81]) is a size effect.** A placebo with the same trigger statistics but scrambled timing does as well (+0.02 pp, CI [−0.04, +0.07]). It matches a 1.5× static hedge on ES, with more variance reduction and at lower cost.
-5. **VWAP timing information is real but secondary.** Across 72 ratchet configurations, 29 beat their placebo and none loses. Timing adds +0.69 pp without a core hedge and 0.00 pp with a full core. Rules that depend on timing protect less (ES 3.5% vs. 4.9%) and cost more.
+<!-- RESULTS:START -->
+<!-- RESULTS:END -->
 
 ## How it works
 
@@ -106,13 +93,13 @@ Hosts used: `data.binance.vision`, `fapi.binance.com`, `api-pub.bitfinex.com`, `
 
 Seit 2024 sind Perpetual Futures auf den Volmex-BVIV-Index handelbar: auf Bitfinex, auf gTrade und seit September 2026 auf Hyperliquid. Damit lässt sich die implizite BTC-Volatilität direkt als Hedge-Instrument einsetzen. Das Paper prüft in einem kalibrierten Markt mit arbitragefrei bepreistem BVIV-Perp, getrennt nach 48 Trainings- und 200 Test-Pfaden, zwei Fragen: Wie prognostiziert man BTC-Volatilität? Und hilft ein VWAP-Signal auf 15-Minuten-Bars beim Hedgen von Spot- oder Perp-Positionen?
 
-1. **Volatilitätsprognose:** Auf Sicht eines Tages gewinnen HAR-Modelle (HAR-IV knapp vor HAR). Auf 30 Tage ist der implizite Index die beste Prognose. HAR-IV ist über alle Horizonte robust.
+1. **Volatilitätsprognose:** Auf Sicht von 1 und 7 Tagen gewinnt HAR mit impliziter Varianz (HAR-IV, in Logarithmen geschätzt). Auf 30 Tage ist der bias-korrigierte implizite Index die beste Prognose.
 2. **Vola-Hedges sind partiell:** Der Minimum-Varianz-Hedge senkt den Expected Shortfall um etwa 4 % bei Kosten unter 1 % des Nominals pro Jahr. Die Spot-Vola-Korrelation von BTC ist schwach und wechselt je nach Regime das Vorzeichen.
 3. **VWAP-Switching zerstört Wert:** Ein- und Ausschalten um den VWAP erzeugt rund 25-fachen Jahresumschlag.
 4. **Der VWAP-Ratchet** (MV-Kern-Hedge plus Crash-Overlay bei VWAP-Breakdowns) verbessert den Expected Shortfall um 0,6 Prozentpunkte gegenüber dem MV-Hedge. Der Placebo-Test zeigt aber: Der Gewinn ist ein **Größeneffekt**, kein Timing. Ein 1,5-fach skalierter statischer Hedge erreicht dasselbe.
 5. **Das VWAP-Signal trägt echte, aber nachrangige Information:** Ohne Kern-Hedge schlägt Breakdown-Timing den Zufall deutlich. Mit Kern-Hedge verschwindet der Timing-Wert. Bei einem Crash zählt, *abgesichert zu sein*, mehr als *rechtzeitig zu reagieren*.
 
-Die Evidenz stammt aus einer kalibrierten Simulation. Die Live-Daten-Pipeline (Binance, Bitfinex BVIV-Perp, Volmex-API, Deribit DVOL) ist enthalten und wendet denselben Placebo-Test unverändert auf echte Daten an.
+Die Evidenz stammt aus einer kalibrierten Simulation. Die Live-Daten-Pipeline (Binance, Bitfinex BVIV-Perp, Volmex-API, Deribit DVOL) ist enthalten. Sie wendet dieselben Regeln und den Placebo-Test auf echte Daten an: Der Ratchet wird gegen alle wöchentlichen Verschiebungen seiner Trigger verglichen.
 
 ## Disclaimer
 
