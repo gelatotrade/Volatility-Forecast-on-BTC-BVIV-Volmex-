@@ -13,8 +13,9 @@ Four rule families are compared:
 * **VWAP-ratchet** -- a core hedge plus a crash overlay that jumps to the
   downside hedge on a VWAP breakdown and decays slowly afterwards: fast to
   protect, slow to un-hedge, so whipsaw around VWAP costs nothing.
-* **Oracle** -- the downside hedge only in the latent stress regime
-  (simulation only; an infeasible upper bound for any timing signal).
+* **Oracle** -- the downside hedge only in the latent stress regime (simulation
+  only; shows what perfect knowledge of the regime is worth -- not an upper bound
+  for timing signals, because many crashes start outside stress).
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ class HedgeConfig:
     qty: float = 1.0                    # BTC held
     instrument: str = "spot"            # "spot" or "perp"
     beta_halflife_days: float = 14.0    # EWMA memory of the spot-vol regression
-    downside_prior_days: float = 2.0    # shrinkage of the downside ratio to the full-sample one
+    downside_prior_days: float = 2.0    # shrinkage of the downside ratio towards the (causal) all-bar EWMA ratio
     anchor: str = "rolling"             # "rolling" 24h VWAP or "session" (UTC day)
     rebalance_band: float = 0.25        # trade only if the target moves > 25% of the position
     fee_bps: float = 6.0                # per side, on traded BVIV-perp notional

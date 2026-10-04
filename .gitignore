@@ -12,3 +12,5 @@ paper/*.out
 paper/*.fls
 paper/*.fdb_latexmk
 paper/*.synctex.gz
+results/quick/
+results/live_*.csv

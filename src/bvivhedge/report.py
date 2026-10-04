@@ -52,7 +52,7 @@ def table_calibration(calib: pd.DataFrame, targets: list[tuple[str, str, str, in
 def table_forecasts(summary: pd.DataFrame, path: str | Path):
     hs = sorted(summary["h"].unique())
     models = list(dict.fromkeys(summary["model"]))
-    head = " & ".join([f"\\multicolumn{{3}}{{c}}{{$h={h}$ days}}" for h in hs])
+    head = " & ".join([f"\\multicolumn{{3}}{{c}}{{$h={h}$ day{'s' if h > 1 else ''}}}" for h in hs])
     cmid = " ".join([f"\\cmidrule(lr){{{2 + 3 * i}-{4 + 3 * i}}}" for i in range(len(hs))])
     sub = " & ".join(["QL ratio & MZ $R^2$ & DM win" for _ in hs])
     rows = []
@@ -84,10 +84,12 @@ def table_hedging(med: pd.DataFrame, order: list[tuple[str, str]], cols: list[tu
 
 
 def table_robustness(rows: list[dict], path: str | Path):
+    labels = {"Trading costs x2": "Trading costs $\\times$2", "Trading costs x0.5": "Trading costs $\\times$0.5",
+              "Funding carry 0": "Carry 0 vol pts", "Funding carry 12": "Carry 12 vol pts"}
     body = []
     for r in rows:
         body.append(
-            f"{r['scenario']} & {_fmt(r['es_always'])} & {_fmt(r['es_ratchet'])} & "
+            f"{labels.get(r['scenario'], r['scenario'])} & {_fmt(r['es_always'])} & {_fmt(r['es_ratchet'])} & "
             f"{_fmt(r['d_mean'], 2, True)} [{_fmt(r['d_lo'], 2, True)}, {_fmt(r['d_hi'], 2, True)}] & "
             f"{r['share']:.0f}\\% & {_fmt(r['es_switch'])} & {_fmt(r['cost_always'], 2)} & {_fmt(r['cost_ratchet'], 2)} \\\\")
     Path(path).write_text(

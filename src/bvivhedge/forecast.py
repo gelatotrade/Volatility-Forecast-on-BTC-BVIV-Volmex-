@@ -2,8 +2,10 @@
 
 Every forecast made at the close of day *t* targets the average daily realised
 variance over days t+1..t+h and uses only information available at that close.
-Regression models are re-estimated on an expanding window whose targets are
-already fully observed (no overlap leakage).
+Regression models are estimated in logs (positive by construction, robust to
+the heavy right tail of realised variance) with a lognormal bias correction,
+and re-estimated on an expanding window whose targets are already fully
+observed (no overlap leakage).
 """
 
 from __future__ import annotations
@@ -38,11 +40,20 @@ def har_features(rv: pd.Series, iv_var: pd.Series | None = None) -> pd.DataFrame
 
 
 # --------------------------------------------------------------------------- estimators
-def expanding_ols_forecast(x: pd.DataFrame, y: pd.Series, h: int, min_obs: int = 180) -> pd.Series:
+def expanding_ols_forecast(x: pd.DataFrame, y: pd.Series, h: int, min_obs: int = 180, log: bool = False) -> pd.Series:
     """Out-of-sample OLS forecast at each t using rows whose h-day target ended by t.
 
-    Implemented with cumulative cross-products, so it is O(n k^2) rather than n regressions.
+    With ``log=True`` the regression is run on log(y) and the logs of every
+    regressor except ``const``; the forecast is exp(x'b + s^2/2), the lognormal
+    bias correction with the training residual variance s^2.  Cumulative
+    cross-products make this O(n k^2) rather than n separate regressions.
     """
+    if log:
+        x = x.copy()
+        for col in x.columns:
+            if col != "const":
+                x[col] = np.log(x[col])
+        y = np.log(y)
     ok = x.notna().all(axis=1) & y.notna()
     xv = x.to_numpy(float)
     yv = y.to_numpy(float)
@@ -51,6 +62,7 @@ def expanding_ols_forecast(x: pd.DataFrame, y: pd.Series, h: int, min_obs: int =
     yz = np.where(ok.to_numpy(), yv, 0.0)
     xtx = np.cumsum(xz[:, :, None] * xz[:, None, :], axis=0)
     xty = np.cumsum(xz * yz[:, None], axis=0)
+    yty = np.cumsum(yz**2)
     cnt = np.cumsum(ok.to_numpy())
     out = np.full(n, np.nan)
     ridge = 1e-12 * np.eye(k)
@@ -59,7 +71,11 @@ def expanding_ols_forecast(x: pd.DataFrame, y: pd.Series, h: int, min_obs: int =
         if s < 0 or cnt[s] < min_obs or not np.isfinite(xv[t]).all():
             continue
         beta = np.linalg.solve(xtx[s] + ridge * np.trace(xtx[s]), xty[s])
-        out[t] = xv[t] @ beta
+        fit = xv[t] @ beta
+        if log:
+            resid_var = max(yty[s] - 2 * beta @ xty[s] + beta @ xtx[s] @ beta, 0.0) / max(cnt[s] - k, 1)
+            fit = np.exp(fit + 0.5 * resid_var)
+        out[t] = fit
     return pd.Series(out, index=x.index)
 
 
@@ -109,12 +125,10 @@ def make_forecasts(daily: pd.DataFrame, iv_close: pd.Series, h: int, min_obs: in
     out["EWMA"] = ewma_variance(ret)
     if garch:
         out["GARCH"] = garch_forecast(ret, h, min_obs=max(min_obs, 365))
-    out["HAR"] = expanding_ols_forecast(har_x, y, h, min_obs)
+    out["HAR"] = expanding_ols_forecast(har_x, y, h, min_obs, log=True)
     out["IV-raw"] = iv_var
-    out["IV"] = expanding_ols_forecast(pd.DataFrame({"const": 1.0, "iv": iv_var}), y, h, min_obs)
-    out["HAR-IV"] = expanding_ols_forecast(hariv_x, y, h, min_obs)
-    floor = 0.05 * rv.rolling(30, min_periods=1).mean()  # keep OLS forecasts strictly positive
-    out = out.clip(lower=floor, axis=0)
+    out["IV"] = expanding_ols_forecast(pd.DataFrame({"const": 1.0, "iv": iv_var}), y, h, min_obs, log=True)
+    out["HAR-IV"] = expanding_ols_forecast(hariv_x, y, h, min_obs, log=True)
     out["target"] = y
     return out
 

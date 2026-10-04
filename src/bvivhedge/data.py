@@ -1,6 +1,6 @@
 """Live market data: BTC 15m klines, BTC perp funding, the BVIV index and its perpetual.
 
-Sources (all public, no key required):
+Sources (all public; only Volmex history needs a free API key):
 
 * Binance bulk archive ``data.binance.vision`` -- BTCUSDT 15m klines (spot or USD-M);
   ``quote_volume / volume`` is each bar's exact VWAP.

@@ -98,7 +98,7 @@ def fig_mechanics(bars: pd.DataFrame, sig: pd.DataFrame, results: dict, window: 
     ax = axes[0]
     ax.plot(b.index, b["close"], color=INK2, lw=0.8, label="BTC close (15m)")
     ax.plot(s.index, s["vwap"], color=BLUE, lw=1.2, label="rolling 24h VWAP")
-    ax.plot(s.index, lower, color=ORANGE, lw=1.0, label=f"breakdown band (z = {z_enter:g})")
+    ax.plot(s.index, lower, color=ORANGE, lw=1.0, label=f"breakdown band (z = {z_enter:g})".replace("-", "\u2212"))
     trig = s["z"] < z_enter
     ax.scatter(b.index[trig], b["close"][trig], s=6, color=ORANGE, zorder=3, linewidths=0)
     ax.set_title("Price, VWAP and the breakdown band", color=INK, pad=14)
@@ -126,9 +126,9 @@ def fig_frontier(med: pd.DataFrame, iqr: pd.DataFrame, selected: dict[str, str],
     ladder = med[fam == "always"].sort_values("hedge_cost")
     ax.plot(np.r_[0.0, ladder["hedge_cost"]], np.r_[0.0, ladder["es_red"]], color=BLUE, lw=1.4, zorder=3)
     ax.scatter(ladder["hedge_cost"], ladder["es_red"], s=26, color=BLUE, edgecolors="#fcfcfb", linewidths=1.5,
-               zorder=4, label="Always-on, scaled 0.5x-3x")
+               zorder=4, label="Always-on, scaled 0.5×–3×")
     for k, row in ladder.iterrows():
-        ax.annotate(f"{float(k.split('|')[1]):g}x", (row["hedge_cost"], row["es_red"]), xytext=(-4, 6), ha="right",
+        ax.annotate(f"{float(k.split('|')[1]):g}×", (row["hedge_cost"], row["es_red"]), xytext=(-4, 6), ha="right",
                     textcoords="offset points", color=INK2, fontsize=7)
     for family, key in selected.items():
         row = med.loc[key]
@@ -142,7 +142,7 @@ def fig_frontier(med: pd.DataFrame, iqr: pd.DataFrame, selected: dict[str, str],
     ax.axhline(0, color=AXIS, lw=0.8)
     ax.set_xlabel("Hedge cost: carry premium + trading (% of BTC notional p.a., median)")
     ax.set_ylabel("ES$_{97.5}$ reduction (%, median)")
-    ax.set_title("Tail protection per unit of cost", color=INK)
+    ax.set_title("Tail protection versus cost", color=INK)
     ax.legend(loc="upper right", handlelength=1.2)
     ax.set_xlim(left=0)
     fig.savefig(path)
@@ -154,6 +154,8 @@ def fig_forecasts(summary: pd.DataFrame, path: str):
     hs = sorted(summary["h"].unique())
     models = [m for m in summary["model"].unique()]
     fig, axes = plt.subplots(1, len(hs), figsize=(WIDTH, 1.75), sharey=True, gridspec_kw={"wspace": 0.08})
+    span = summary["qlike_ratio"]
+    lo, hi = min(0.75, span.min() - 0.05), max(1.25, span.max() + 0.05)   # one shared scale across horizons
     for ax, h in zip(np.atleast_1d(axes), hs):
         d = summary[summary["h"] == h].set_index("model").reindex(models)
         y = np.arange(len(models))[::-1]
@@ -163,6 +165,7 @@ def fig_forecasts(summary: pd.DataFrame, path: str):
         colors = [BLUE if m == best else MUTED for m in models]
         ax.scatter(d["qlike_ratio"], y, s=28, color=colors, edgecolors="#fcfcfb", linewidths=1.2, zorder=3)
         ax.set_title(f"{h}-day horizon", color=INK)
+        ax.set_xlim(lo, hi)
         ax.set_yticks(y, models)
         ax.set_xlabel("QLIKE / QLIKE(HAR)")
         ax.grid(axis="y", visible=False)

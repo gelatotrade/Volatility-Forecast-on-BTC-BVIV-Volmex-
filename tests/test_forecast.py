@@ -26,6 +26,16 @@ def test_expanding_ols_has_no_lookahead():
     assert np.allclose(full.iloc[:cut], part, equal_nan=True)
 
 
+def test_log_forecasts_are_positive_and_causal():
+    rv = _har_process()
+    h = 7
+    x, y = har_features(rv), forward_mean(rv, h)
+    full = expanding_ols_forecast(x, y, h, min_obs=200, log=True)
+    part = expanding_ols_forecast(x.iloc[:900], forward_mean(rv.iloc[:900], h), h, min_obs=200, log=True)
+    assert (full.dropna() > 0).all()
+    assert np.allclose(full.iloc[:900], part, equal_nan=True)
+
+
 def test_har_recovers_persistence():
     rv = _har_process(4000)
     x, y = har_features(rv), forward_mean(rv, 1)
