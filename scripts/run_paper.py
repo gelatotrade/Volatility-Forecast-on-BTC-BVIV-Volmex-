@@ -278,6 +278,8 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
     diag = crash_cluster_diagnostic(params, cfg, selection)
     rr, ss = rule_from_key(rt), rule_from_key(sw)
     f = fsum.set_index(["h", "model"])
+    loss = evals.pivot_table(index=["h", "seed"], columns="model", values="qlike")
+    blowups = int((loss["HAR-IV"] > 2 * loss["HAR"]).sum())          # paths x horizons with a collapse
     nums = {
         "n_test": f"{test['seed'].nunique()}", "n_train": f"{json.loads((RESULTS / 'selection.json').read_text())['train_seeds'][1] - TRAIN_SEED0}",
         "n_rules": f"{len(rule_grid()) - 1}", "sim_days": f"{params.days}",
@@ -323,6 +325,9 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         "ql_har_iv_seven": f"{f.loc[(7, 'HAR-IV'), 'qlike_ratio']:.2f}", "ql_iv_seven": f"{f.loc[(7, 'IV'), 'qlike_ratio']:.2f}",
         "dm_win_har_iv_one": f"{f.loc[(1, 'HAR-IV'), 'dm_win']:.0f}", "dm_loss_har_iv_one": f"{f.loc[(1, 'HAR-IV'), 'dm_loss']:.0f}",
         "dm_win_iv_thirty": f"{f.loc[(30, 'IV'), 'dm_win']:.0f}", "dm_loss_iv_thirty": f"{f.loc[(30, 'IV'), 'dm_loss']:.0f}",
+        "dm_win_har_iv_seven": f"{f.loc[(7, 'HAR-IV'), 'dm_win']:.0f}", "dm_loss_har_iv_seven": f"{f.loc[(7, 'HAR-IV'), 'dm_loss']:.0f}",
+        "ql_har_iv_one_mean": f"{f.loc[(1, 'HAR-IV'), 'qlike']:.3f}", "ql_har_one_mean": f"{f.loc[(1, 'HAR'), 'qlike']:.3f}",
+        "har_iv_blowups": f"{blowups}",
         "corr_daily": f"{calib['corr_daily'].median():.2f}", "corr_down": f"{calib['corr_down'].median():.2f}",
         "corr_up": f"{calib['corr_up'].median():.2f}", "vrp": calib["vrp"].median(),
         "hedge_carry": f"{params.hedge_carry:g}", "fee": f"{cfg.fee_bps:g}", "slip": f"{cfg.slippage_bps:g}",
