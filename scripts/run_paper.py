@@ -41,6 +41,12 @@ PAPER = ROOT / "paper"
 SIM_DAYS = 900
 ROBUST_SEED0 = 20_000   # robustness scenarios run on their own, disjoint seed block
 
+def signed(x: float, nd: int = 2) -> str:
+    """'+0.61' / '-1.67', but a value that rounds to zero prints as plain '0.00'."""
+    text = f"{x:+.{nd}f}"
+    return text[1:] if float(text) == 0 else text
+
+
 def final_rules(selection: dict[str, str]) -> list[Rule]:
     return [Rule("Unhedged", "unhedged"), rule_from_key("always|1"), rule_from_key(selection["switch"]),
             rule_from_key(selection["ratchet"]), rule_from_key("oracle|1")]
@@ -253,18 +259,18 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         "cost_switch": f"{med_all.loc[sw, 'hedge_cost']:.2f}", "turn_switch": med_all.loc[sw, "turnover"],
         "turn_always": med_all.loc["always|1", "turnover"], "turn_ratchet": med_all.loc[rt, "turnover"],
         "notional_always": med_all.loc["always|1", "notional"], "notional_ratchet": med_all.loc[rt, "notional"],
-        "d_es_ratchet": f"{d_rt['mean']:+.2f}", "d_es_ratchet_lo": f"{d_rt['lo']:+.2f}", "d_es_ratchet_hi": f"{d_rt['hi']:+.2f}",
-        "share_ratchet": f"{100 * d_rt['share_pos']:.0f}", "d_es_switch": f"{d_sw['mean']:+.2f}",
-        "d_mdd_ratchet": f"{d_mdd['mean']:+.2f}",
+        "d_es_ratchet": signed(d_rt['mean']), "d_es_ratchet_lo": signed(d_rt['lo']), "d_es_ratchet_hi": signed(d_rt['hi']),
+        "share_ratchet": f"{100 * d_rt['share_pos']:.0f}", "d_es_switch": signed(d_sw['mean']),
+        "d_mdd_ratchet": signed(d_mdd['mean']),
         "es_red_always_two": med_all.loc["always|2", "es_red"], "es_red_always_three": med_all.loc["always|3", "es_red"],
         "es_red_always_onehalf": med_all.loc["always|1.5", "es_red"], "cost_always_onehalf": f"{med_all.loc['always|1.5', 'hedge_cost']:.2f}",
         "var_red_always_onehalf": med_all.loc["always|1.5", "var_red"], "var_red_switch": med_all.loc[sw, "var_red"],
-        "d_var_ratchet": f"{d_var['mean']:+.2f}", "d_tail_ratchet": f"{d_tail['mean']:+.1f}",
-        "share_tail_ratchet": f"{100 * d_tail['share_pos']:.0f}", "d_es_switch_lo": f"{d_sw['lo']:+.2f}", "d_es_switch_hi": f"{d_sw['hi']:+.2f}",
-        "d_es_fc": f"{d_fc['mean']:+.2f}", "d_es_fc_lo": f"{d_fc['lo']:+.2f}", "d_es_fc_hi": f"{d_fc['hi']:+.2f}",
+        "d_var_ratchet": signed(d_var['mean']), "d_tail_ratchet": signed(d_tail['mean'], 1),
+        "share_tail_ratchet": f"{100 * d_tail['share_pos']:.0f}", "d_es_switch_lo": signed(d_sw['lo']), "d_es_switch_hi": signed(d_sw['hi']),
+        "d_es_fc": signed(d_fc['mean']), "d_es_fc_lo": signed(d_fc['lo']), "d_es_fc_hi": signed(d_fc['hi']),
         "share_above_ladder": f"{100 * above:.0f}", "n_ratchet_grid": f"{len(grid)}",
-        "diag_base_always": f"{diag['base']['always|1']:+.2f}", "diag_base_ratchet": f"{diag['base'][rt]:+.2f}",
-        "diag_cluster_always": f"{diag['cluster']['always|1']:+.2f}", "diag_cluster_ratchet": f"{diag['cluster'][rt]:+.2f}",
+        "diag_base_always": signed(diag['base']['always|1']), "diag_base_ratchet": signed(diag['base'][rt]),
+        "diag_cluster_always": signed(diag['cluster']['always|1']), "diag_cluster_ratchet": signed(diag['cluster'][rt]),
         "ratchet_z": f"{rr.z_enter:g}", "ratchet_hl": f"{rr.halflife_days:g}", "ratchet_floor": f"{rr.floor:g}",
         "ratchet_fc": "with" if rr.use_forecast else "without",
         "switch_z": f"{ss.z_enter:g}", "switch_exit": f"{ss.z_exit:g}",
@@ -277,23 +283,24 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         "corr_daily": f"{calib['corr_daily'].median():.2f}", "corr_down": f"{calib['corr_down'].median():.2f}",
         "corr_up": f"{calib['corr_up'].median():.2f}", "vrp": calib["vrp"].median(),
         "hedge_carry": f"{params.hedge_carry:g}", "fee": f"{cfg.fee_bps:g}", "slip": f"{cfg.slippage_bps:g}",
-        "es_red_placebo": placebo["es_placebo"], "d_es_placebo": f"{placebo['mean']:+.2f}",
-        "d_es_placebo_lo": f"{placebo['lo']:+.2f}", "d_es_placebo_hi": f"{placebo['hi']:+.2f}",
+        "es_red_placebo": placebo["es_placebo"], "d_es_placebo": signed(placebo['mean']),
+        "d_es_placebo_lo": signed(placebo['lo']), "d_es_placebo_hi": signed(placebo['hi']),
         "share_placebo": f"{100 * placebo['share_pos']:.0f}", "n_placebo": f"{len(PLACEBO_SHIFTS)}",
-        "pgrid_n": f"{pgrid['n']}", "pgrid_mean": f"{pgrid['mean']:+.2f}", "pgrid_min": f"{pgrid['min']:+.2f}",
-        "pgrid_max": f"{pgrid['max']:+.2f}", "pgrid_sig_pos": f"{pgrid['sig_pos']}", "pgrid_sig_neg": f"{pgrid['sig_neg']}",
+        "pgrid_n": f"{pgrid['n']}", "pgrid_mean": signed(pgrid['mean']), "pgrid_min": signed(pgrid['min']),
+        "pgrid_max": signed(pgrid['max']),
+        "pgrid_max_abs": f"{abs(pgrid['max']):.2f}", "pgrid_sig_pos": f"{pgrid['sig_pos']}", "pgrid_sig_neg": f"{pgrid['sig_neg']}",
         "pgrid_paths": f"{GRID_PATHS}", "pgrid_shifts": f"{len(GRID_SHIFTS)}",
-        "pgrid_floor_zero": f"{pgrid['floor_zero']:+.2f}", "pgrid_floor_half": f"{pgrid['floor_half']:+.2f}",
-        "pgrid_floor_one": f"{pgrid['floor_one']:+.2f}", "pgrid_es_floor_zero": pgrid["es_floor_zero"],
+        "pgrid_floor_zero": signed(pgrid['floor_zero']), "pgrid_floor_half": signed(pgrid['floor_half']),
+        "pgrid_floor_one": signed(pgrid['floor_one']), "pgrid_es_floor_zero": pgrid["es_floor_zero"],
         "pgrid_es_floor_one": pgrid["es_floor_one"], "pgrid_best_es": pgrid["best_es"],
         "pgrid_best_cost": f"{pgrid['best_cost']:.1f}", "pgrid_corr": f"{pgrid['corr']:.2f}",
         "pgrid_always_es": pgrid["always_es"],
     }
     for r in robust.to_dict("records"):
         key = "rob." + r["scenario"].lower().replace("x0.5", "half").replace("x2", "double").replace(" 0", " zero").replace(" 12", " twelve")
-        nums[key] = f"{r['d_mean']:+.2f}"
-        nums[key.replace("rob.", "rob lo.")] = f"{r['d_lo']:+.2f}"
-        nums[key.replace("rob.", "rob hi.")] = f"{r['d_hi']:+.2f}"
+        nums[key] = signed(r['d_mean'])
+        nums[key.replace("rob.", "rob lo.")] = signed(r['d_lo'])
+        nums[key.replace("rob.", "rob hi.")] = signed(r['d_hi'])
     report.write_numbers(nums, PAPER / "numbers.tex")
 
     if compile_pdf:

@@ -1,8 +1,8 @@
 # Hedging Bitcoin with Its Own Fear Gauge
 
-**Volatility forecasts, the Volmex BVIV index and a 15-minute VWAP ratchet**
+**Volatility forecasts, the Volmex BVIV index and what 15-minute VWAP timing is worth**
 
-📄 **Paper:** [`paper/main.pdf`](paper/main.pdf) (8 pages)
+📄 **Paper:** [`paper/main.pdf`](paper/main.pdf) (8 pages plus references)
 
 This repository asks two questions:
 
@@ -13,7 +13,21 @@ The paper, every table, every figure and every number quoted in the text are gen
 
 ## Key results
 
-<!-- RESULTS -->
+These are out-of-sample results on 200 simulated test paths. Rules were selected on 48 separate training paths. ES = expected shortfall (97.5%) of daily returns, net of carry and trading costs.
+
+| Rule | ES reduction | Variance reduction | Hedge cost (% p.a.) | Turnover |
+|---|---|---|---|---|
+| Always-on minimum-variance hedge | 4.2% | 4.1% | 0.88 | 0.9× |
+| Always-on, scaled 1.5× | 4.9% | 3.1% | 1.32 | 1.3× |
+| VWAP-switch (on below band, off above VWAP) | 2.8% | 1.9% | 4.32 | 24.6× |
+| **VWAP-ratchet** (MV core + breakdown overlay) | **5.0%** | **3.8%** | **1.21** | 1.4× |
+| Ratchet with placebo timing | 5.0% | 3.8% | 1.21 | 1.4× |
+
+1. **Forecasting.** HAR-type models win at 1 day: HAR-IV is marginally ahead of HAR, and implied volatility alone is 18% worse in QLIKE. Implied volatility wins at 30 days (QLIKE 0.81 × HAR). HAR-IV is robust across horizons.
+2. **BVIV hedges are partial.** The spot-vol correlation is weak (−0.21 daily) and changes sign by regime. The minimum-variance hedge cuts ES by about 4% for under 1% of notional a year.
+3. **Naive VWAP switching fails.** It turns over the BTC notional 25× a year, and its ES reduction falls short of the always-on hedge by 1.7 pp.
+4. **The ratchet's gain over the MV hedge (+0.61 pp ES, 95% CI [+0.41, +0.81]) is a size effect.** A placebo with the same trigger statistics but scrambled timing does as well (+0.02 pp, CI [−0.04, +0.07]). It matches a 1.5× static hedge on ES, with more variance reduction and at lower cost.
+5. **VWAP timing information is real but secondary.** Across 72 ratchet configurations, 29 beat their placebo and none loses. Timing adds +0.69 pp without a core hedge and 0.00 pp with a full core. Rules that depend on timing protect less (ES 3.5% vs. 4.9%) and cost more.
 
 ## How it works
 
@@ -23,7 +37,7 @@ The paper, every table, every figure and every number quoted in the text are gen
         ▼                                      ▼
  rolling 24h VWAP ──► z = ln(S/VWAP) / (σ̂·√(1/3)) ──► breakdown trigger
                                                           │
- BVIV perp (mark, funding) ──► EWMA MV hedge β, downside semi-beta β⁻
+ BVIV perp (mark, funding) ──► EWMA MV hedge β, downside hedge ratio β⁻
                                                           ▼
                         VWAP ratchet: H = φ·H* + o_t·max(H⁻ − φ·H*, 0)
                         o_t = 1 on a breakdown, decays with half-life τ
@@ -32,9 +46,9 @@ The paper, every table, every figure and every number quoted in the text are gen
 ```
 
 * **VWAP ratchet** (`src/bvivhedge/hedge.py`). The ratchet keeps a minimum-variance core hedge. When price breaks below the VWAP band, it raises protection to the downside hedge ratio straight away, then lets it decay slowly. Re-triggers inside an episode cost nothing, so whipsaw around VWAP does not generate trades.
-* **Fair BVIV perpetual** (`src/bvivhedge/simulate.py`). Funding = exact one-bar expected index drift + a carry premium. Long-volatility hedgers therefore pay exactly the calibrated carry, with no free lunch from mean reversion. A unit test checks this against brute-force Monte Carlo.
+* **Exact BVIV index and fair perpetual** (`src/bvivhedge/simulate.py`). The index is the model's own 30-day variance expectation, exact over regime paths (Feynman–Kac). Funding = exact one-bar expected index drift + a carry premium, so long-volatility hedgers pay exactly the calibrated carry, with no free lunch from mean reversion. Both are checked against brute-force Monte Carlo in the tests.
 * **No look-ahead.** Every signal and forecast is causal. Tests confirm that truncating the sample never changes a past value.
-* **Train/test separation.** The 87 candidate rules are selected on training seeds and reported on disjoint test seeds.
+* **Train/test separation and placebos.** The 87 candidate rules are selected on training seeds and reported on disjoint test seeds. Every ratchet is also compared with a copy whose trigger series is circularly shifted (same statistics, scrambled timing), which separates timing information from hedge size.
 
 ## Repository layout
 
@@ -51,7 +65,7 @@ src/bvivhedge/
   experiments.py       Monte Carlo, rule grid, selection, paired bootstrap
   data.py              live loaders: Binance, Bitfinex BVIV perp, Volmex API, Deribit DVOL
   plots.py, report.py  figures, LaTeX tables, number macros
-tests/                 26+ tests: accounting identities, causality, perp fairness, parsers
+tests/                 31 tests: accounting identities, causality, exact index expectation, perp fairness, parsers
 results/               cached Monte Carlo results (CSV) and the rule selection
 ```
 
@@ -59,9 +73,9 @@ results/               cached Monte Carlo results (CSV) and the rule selection
 
 ```bash
 pip install -r requirements.txt
-python -m pytest                       # ~2 s
-python scripts/run_paper.py            # full study, ~30 min on 4 cores, rebuilds paper/main.pdf
-python scripts/run_paper.py --quick    # smoke run (8 paths)
+python -m pytest                       # ~10 s
+python scripts/run_paper.py            # full study, ~45 min on 4 cores, rebuilds paper/main.pdf
+python scripts/run_paper.py --quick    # smoke run (8 paths), written to results/quick/
 python scripts/run_paper.py --stage paper   # rebuild figures/tables/PDF from cached results
 ```
 
@@ -85,12 +99,15 @@ Hosts used: `data.binance.vision`, `fapi.binance.com`, `api-pub.bitfinex.com`, `
 
 ## Kurzfassung (Deutsch)
 
-Seit 2024 sind Perpetual Futures auf den Volmex-BVIV-Index handelbar: auf Bitfinex, auf gTrade und seit September 2026 auf Hyperliquid. Damit lässt sich die implizite BTC-Volatilität direkt als Hedge-Instrument einsetzen. Das Paper kommt zu vier Ergebnissen:
+Seit 2024 sind Perpetual Futures auf den Volmex-BVIV-Index handelbar: auf Bitfinex, auf gTrade und seit September 2026 auf Hyperliquid. Damit lässt sich die implizite BTC-Volatilität direkt als Hedge-Instrument einsetzen. Das Paper prüft in einem kalibrierten Markt mit arbitragefrei bepreistem BVIV-Perp, getrennt nach 48 Trainings- und 200 Test-Pfaden, zwei Fragen: Wie prognostiziert man BTC-Volatilität? Und hilft ein VWAP-Signal auf 15-Minuten-Bars beim Hedgen von Spot- oder Perp-Positionen?
 
-1. **Volatilitätsprognose:** HAR auf Basis von 15-Minuten-Realized-Volatility ist auf Sicht eines Tages am besten. Ab etwa einer Woche dominiert der implizite Index. Die Kombination HAR-IV ist über alle Horizonte am robustesten.
-2. **Naives VWAP-Switching scheitert:** Wer den Hedge um den VWAP herum ein- und ausschaltet, verliert den Schutz durch Turnover.
-3. **VWAP-Ratchet:** Das Ratchet hält einen Minimum-Varianz-Kern-Hedge. Bricht der Kurs unter das VWAP-Band, erhöht es den Crash-Schutz sofort und baut ihn danach langsam wieder ab. So verbessert es die Tail-Absicherung (Expected Shortfall) stärker als ein einfaches Hochskalieren des statischen Hedges, bei gleichen Kosten.
-4. **Grenzen:** Der Vola-Hedge bleibt partiell, weil die Spot-Vola-Korrelation bei BTC schwach ist und regimeabhängig ihr Vorzeichen wechselt. Die Evidenz stammt aus einer kalibrierten Simulation. Die Live-Daten-Pipeline ist enthalten und läuft unverändert auf Binance-, Bitfinex- und Volmex-Daten.
+1. **Volatilitätsprognose:** Auf Sicht eines Tages gewinnen HAR-Modelle (HAR-IV knapp vor HAR). Auf 30 Tage ist der implizite Index die beste Prognose. HAR-IV ist über alle Horizonte robust.
+2. **Vola-Hedges sind partiell:** Der Minimum-Varianz-Hedge senkt den Expected Shortfall um etwa 4 % bei Kosten unter 1 % des Nominals pro Jahr. Die Spot-Vola-Korrelation von BTC ist schwach und wechselt je nach Regime das Vorzeichen.
+3. **VWAP-Switching zerstört Wert:** Ein- und Ausschalten um den VWAP erzeugt rund 25-fachen Jahresumschlag.
+4. **Der VWAP-Ratchet** (MV-Kern-Hedge plus Crash-Overlay bei VWAP-Breakdowns) verbessert den Expected Shortfall um 0,6 Prozentpunkte gegenüber dem MV-Hedge. Der Placebo-Test zeigt aber: Der Gewinn ist ein **Größeneffekt**, kein Timing. Ein 1,5-fach skalierter statischer Hedge erreicht dasselbe.
+5. **Das VWAP-Signal trägt echte, aber nachrangige Information:** Ohne Kern-Hedge schlägt Breakdown-Timing den Zufall deutlich. Mit Kern-Hedge verschwindet der Timing-Wert. Bei einem Crash zählt, *abgesichert zu sein*, mehr als *rechtzeitig zu reagieren*.
+
+Die Evidenz stammt aus einer kalibrierten Simulation. Die Live-Daten-Pipeline (Binance, Bitfinex BVIV-Perp, Volmex-API, Deribit DVOL) ist enthalten und wendet denselben Placebo-Test unverändert auf echte Daten an.
 
 ## Disclaimer
 
