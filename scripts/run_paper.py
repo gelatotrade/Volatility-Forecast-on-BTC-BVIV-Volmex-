@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -364,7 +365,8 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
 def write_readme_results(med: pd.DataFrame, rows: list[tuple[str, str]], nums: dict, path: Path = ROOT / "README.md"):
     """Regenerate the README's key-results block from the same numbers as the paper."""
     def plain(v):
-        return str(v).replace("\\ensuremath{-}", "−") if isinstance(v, str) else f"{v:.1f}"
+        text = str(v).replace("\\ensuremath{-}", "−") if isinstance(v, str) else f"{v:.1f}"
+        return re.sub(r"(?<![\w.])-(?=\d)", "−", text)          # typographic minus for negative numbers
     table = ["| Rule | ES reduction | Variance reduction | Hedge cost (% p.a.) | Turnover |", "|---|---|---|---|---|"]
     for key, label in rows:
         r = med.loc[key]

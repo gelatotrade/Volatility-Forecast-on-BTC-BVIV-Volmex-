@@ -70,7 +70,7 @@ def fig_market(bars: pd.DataFrame, path: str):
     """BTC and BVIV on one simulated path, latent stress regime shaded."""
     daily = bars.resample("4h").last()
     stress = (bars["regime"] == 1).resample("4h").mean() > 0.5 if "regime" in bars else None
-    fig, axes = plt.subplots(2, 1, figsize=(WIDTH, 2.45), sharex=True, gridspec_kw={"hspace": 0.32})
+    fig, axes = plt.subplots(2, 1, figsize=(WIDTH, 2.2), sharex=True, gridspec_kw={"hspace": 0.34})
     for ax, col, title in ((axes[0], "close", "BTC price (USD, log scale)"),
                            (axes[1], "bviv", "BVIV implied volatility (vol points)")):
         if stress is not None:
@@ -94,7 +94,7 @@ def fig_mechanics(bars: pd.DataFrame, sig: pd.DataFrame, results: dict, window: 
     """A breakdown episode: price vs rolling VWAP and band (top), hedge sizes (bottom)."""
     b, s = bars.loc[window], sig.loc[window]
     lower = s["vwap"] * np.exp(z_enter * s["sigma_day"] / np.sqrt(3.0))
-    fig, axes = plt.subplots(2, 1, figsize=(WIDTH, 3.0), sharex=True, gridspec_kw={"hspace": 0.5, "height_ratios": [1.25, 1]})
+    fig, axes = plt.subplots(2, 1, figsize=(WIDTH, 2.75), sharex=True, gridspec_kw={"hspace": 0.55, "height_ratios": [1.25, 1]})
     ax = axes[0]
     ax.plot(b.index, b["close"], color=INK2, lw=0.8, label="BTC close (15m)")
     ax.plot(s.index, s["vwap"], color=BLUE, lw=1.2, label="rolling 24h VWAP")
@@ -118,7 +118,7 @@ def fig_mechanics(bars: pd.DataFrame, sig: pd.DataFrame, results: dict, window: 
 
 def fig_frontier(med: pd.DataFrame, iqr: pd.DataFrame, selected: dict[str, str], path: str):
     """Median ES reduction vs median hedge cost on test paths, per rule family."""
-    fig, ax = plt.subplots(figsize=(WIDTH, 2.45))
+    fig, ax = plt.subplots(figsize=(WIDTH, 2.25))
     fam = med.index.to_series().str.split("|").str[0]
     for key, color, label in (("switch", ORANGE, "VWAP-switch grid"), ("ratchet", AQUA, "VWAP-ratchet grid")):
         pts = med[fam == key]
