@@ -1,0 +1,8 @@
+{
+  "switch": "switch|-1|0.5",
+  "ratchet": "ratchet|-1.5|4|1|1",
+  "train_seeds": [
+    10000,
+    10048
+  ]
+}

@@ -1,0 +1,18 @@
+\begin{tabular}{@{}lrrcrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{ES red. (\%)} & Ratchet $-$ Always & & Switch & \multicolumn{2}{c}{Cost (\% p.a.)} \\
+\cmidrule(lr){2-3}\cmidrule(lr){7-8}
+Scenario & Always & Ratchet & mean [95\% CI] & $>0$ & ES red. & Always & Ratchet \\
+\midrule
+Baseline & 4.3 & 5.1 & +0.66 [+0.39, +0.94] & 71\% & 3.6 & 0.87 & 1.22 \\
+Trading costs $\times$2 & 4.3 & 5.1 & +0.63 [+0.37, +0.91] & 71\% & 3.4 & 1.01 & 1.46 \\
+Trading costs $\times$0.5 & 4.3 & 5.2 & +0.67 [+0.41, +0.95] & 71\% & 3.7 & 0.80 & 1.10 \\
+Carry 0 vol pts & 4.3 & 5.2 & +0.67 [+0.40, +0.95] & 71\% & 3.7 & 0.13 & 0.24 \\
+Carry 12 vol pts & 4.3 & 5.1 & +0.65 [+0.38, +0.93] & 71\% & 3.6 & 1.61 & 2.20 \\
+VIX-like spot-vol & 9.7 & 10.2 & +0.74 [+0.47, +1.03] & 69\% & 6.3 & 1.33 & 1.64 \\
+Inverse leverage & 0.5 & 0.7 & +0.18 [\ensuremath{-}0.02, +0.39] & 58\% & 0.5 & 0.25 & 0.57 \\
+Crashes cluster in stress & 5.3 & 5.1 & +0.34 [\ensuremath{-}0.00, +0.68] & 61\% & 3.1 & 0.85 & 1.18 \\
+Session-anchored VWAP & 4.3 & 5.4 & +0.73 [+0.44, +1.02] & 73\% & 3.4 & 0.87 & 1.25 \\
+Perpetual BTC book & 4.3 & 5.1 & +0.64 [+0.38, +0.92] & 71\% & 3.6 & 0.87 & 1.22 \\
+\bottomrule
+\end{tabular}
