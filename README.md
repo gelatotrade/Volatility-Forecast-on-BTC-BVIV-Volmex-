@@ -95,6 +95,9 @@ The same pipeline runs on exchange data. The live inputs are mapped into the sim
 ```bash
 # BTC: Binance 15m klines + funding; BVIV: Bitfinex BVIVF0:USTF0 (index, mark, funding since 2024-04)
 python scripts/run_paper.py --live --start 2024-04 --end 2026-09 --iv bitfinex
+# Hyperliquid mkts:BVIV (HIP-3, listed Sep 2026): only ~2 weeks of history so far, too short for the full
+# protocol on its own (>= ~15 months needed); use it for recent out-of-sample checks
+python scripts/run_paper.py --live --iv hyperliquid --start 2026-09 --end 2026-10
 # BVIV from the Volmex REST API (historical ranges need a key)
 VOLMEX_API_KEY=... python scripts/run_paper.py --live --iv volmex
 # Deribit DVOL as a proxy, or any CSV export of BVIV (columns: time, close)
@@ -102,7 +105,7 @@ python scripts/run_paper.py --live --iv dvol
 python scripts/run_paper.py --live --iv path/to/bviv.csv --book perp
 ```
 
-Hosts used: `data.binance.vision`, `fapi.binance.com`, `api-pub.bitfinex.com`, `rest-v1.volmex.finance`, `www.deribit.com`. Every response is cached in `data/raw/`. The live window needs at least about 15 months (forecast evaluation starts on day 365, hedging on day 270). The live run also prints the timing placebo: the ratchet's ES reduction against every weekly shift of its triggers.
+Hosts used: `data.binance.vision`, `fapi.binance.com`, `api-pub.bitfinex.com`, `api.hyperliquid.xyz`, `rest-v1.volmex.finance`, `www.deribit.com`. Exports from other providers (e.g. 0xArchive) can be passed as CSV via `--iv path/to/bviv.csv`. Every response is cached in `data/raw/`. The live window needs at least about 15 months (forecast evaluation starts on day 365, hedging on day 270). The live run also prints the timing placebo: the ratchet's ES reduction against every weekly shift of its triggers.
 
 ## Kurzfassung (Deutsch)
 

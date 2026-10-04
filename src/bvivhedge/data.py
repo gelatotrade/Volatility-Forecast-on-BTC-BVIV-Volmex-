@@ -7,6 +7,9 @@ Sources (all public; only Volmex history needs a free API key):
 * Binance USD-M REST -- BTCUSDT funding-rate history.
 * Bitfinex -- the BVIV perpetual ``tBVIVF0:USTF0`` (listed April 2024): trade candles and
   the derivatives-status history (index price, mark price, current funding).
+* Hyperliquid ``api.hyperliquid.xyz/info`` -- the HIP-3 BVIV perpetual ``mkts:BVIV``
+  (listed September 2026): 15m candles and hourly funding.  The public API keeps
+  only the latest 5000 candles (about 52 days of 15m bars).
 * Volmex REST API ``rest-v1.volmex.finance/v2/history`` -- BVIV bars at 1-60 minute and
   daily resolution (historical ranges need an API key, read from ``VOLMEX_API_KEY``).
 * Deribit -- the DVOL index, a close substitute for BVIV before the perpetual existed.
@@ -41,6 +44,20 @@ def _get(url: str, retries: int = 4) -> bytes:
     for attempt in range(retries):
         try:
             with urlopen(Request(url, headers={"User-Agent": "bvivhedge/1.0"}), timeout=60) as resp:
+                return resp.read()
+        except Exception:
+            if attempt == retries - 1:
+                raise
+            time.sleep(2 ** (attempt + 1))
+    raise RuntimeError("unreachable")
+
+
+def _post_json(url: str, body: dict, retries: int = 4) -> bytes:
+    data = json.dumps(body).encode()
+    for attempt in range(retries):
+        try:
+            req = Request(url, data=data, headers={"Content-Type": "application/json", "User-Agent": "bvivhedge/1.0"})
+            with urlopen(req, timeout=60) as resp:
                 return resp.read()
         except Exception:
             if attempt == retries - 1:
@@ -168,6 +185,70 @@ def fetch_bitfinex_bviv(start: str, end: str) -> pd.DataFrame:
     status15 = status.resample(BAR, label="left", closed="left").last()
     out = pd.DataFrame({"perp_close": candles["close"]}).join(status15, how="outer")
     return out[~out.index.duplicated()].sort_index()
+
+
+# --------------------------------------------------------------------------- Hyperliquid BVIV perpetual
+HYPERLIQUID_INFO = "https://api.hyperliquid.xyz/info"
+HYPERLIQUID_COIN = "mkts:BVIV"   # HIP-3 markets are addressed as "<dex>:<coin>"
+
+
+def parse_hyperliquid_candles(payload: bytes) -> pd.DataFrame:
+    """candleSnapshot rows {t, T, s, i, o, c, h, l, v, n} -> OHLCV indexed by open time."""
+    rows = json.loads(payload)
+    if not rows:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"], dtype=float)
+    df = pd.DataFrame(rows)
+    out = df[["o", "h", "l", "c", "v"]].astype(float).set_axis(["open", "high", "low", "close", "volume"], axis=1)
+    out.index = pd.to_datetime(df["t"].astype("int64"), unit="ms", utc=True)
+    return out.sort_index()
+
+
+def parse_hyperliquid_funding(payload: bytes) -> pd.Series:
+    """fundingHistory rows {coin, fundingRate, premium, time}: hourly rate on notional."""
+    rows = json.loads(payload)
+    return pd.Series([float(r["fundingRate"]) for r in rows],
+                     index=pd.to_datetime([int(r["time"]) for r in rows], unit="ms", utc=True), dtype=float).sort_index()
+
+
+def fetch_hyperliquid_bviv(start: str, end: str, coin: str = HYPERLIQUID_COIN) -> pd.DataFrame:
+    """15m BVIV perpetual on Hyperliquid in the same schema as :func:`fetch_bitfinex_bviv`.
+
+    The API has no historical oracle series, so ``index`` and ``mark`` are the
+    perpetual's own close (funding keeps it within a small premium of the index).
+    Hourly funding is expressed as an 8h-equivalent rate (x8) for the shared assembly.
+    """
+    t0 = int(pd.Timestamp(start, tz="UTC").timestamp() * 1000)
+    t1 = int(pd.Timestamp(end, tz="UTC").timestamp() * 1000)
+    candles, cursor = [], t0
+    while cursor < t1:
+        body = {"type": "candleSnapshot", "req": {"coin": coin, "interval": "15m", "startTime": cursor, "endTime": t1}}
+        df = parse_hyperliquid_candles(_post_json(HYPERLIQUID_INFO, body))
+        if df.empty:
+            break
+        candles.append(df)
+        cursor = int(df.index[-1].timestamp() * 1000) + 1
+    funding, cursor = [], t0
+    while cursor < t1:
+        body = {"type": "fundingHistory", "coin": coin, "startTime": cursor, "endTime": t1}
+        s = parse_hyperliquid_funding(_post_json(HYPERLIQUID_INFO, body))
+        if s.empty:
+            break
+        funding.append(s)
+        cursor = int(s.index[-1].timestamp() * 1000) + 1
+    if not candles:
+        raise RuntimeError(f"no Hyperliquid candles for {coin} between {start} and {end}")
+    c = pd.concat(candles)
+    c = c[~c.index.duplicated()].sort_index()
+    out = pd.DataFrame({"perp_close": c["close"], "mark": c["close"], "index": c["close"]})
+    if funding:
+        f = pd.concat(funding)
+        f = f[~f.index.duplicated()].sort_index()
+        # an hourly rate settled at T accrues over (T - 1h, T]
+        f.index = f.index.floor(BAR) - pd.Timedelta("1h")
+        out["funding_8h"] = 8.0 * f.reindex(out.index, method="ffill")
+    else:
+        out["funding_8h"] = np.nan
+    return out
 
 
 # --------------------------------------------------------------------------- Volmex BVIV

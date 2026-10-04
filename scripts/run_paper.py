@@ -416,8 +416,9 @@ def run_live(args, cfg: HedgeConfig, selection: dict[str, str]):
     last = (pd.Period(args.end, "M") + 1).start_time.strftime("%Y-%m-%d")   # exclusive end: whole last month
     klines = data.fetch_binance_klines(args.start, args.end, market="perp" if args.book == "perp" else "spot")
     funding = data.fetch_binance_funding(first, last)
-    perp = data.fetch_bitfinex_bviv(first, last) if args.iv == "bitfinex" else None
-    if args.iv == "bitfinex":
+    perp = {"bitfinex": data.fetch_bitfinex_bviv, "hyperliquid": data.fetch_hyperliquid_bviv}.get(args.iv)
+    perp = perp(first, last) if perp else None
+    if args.iv in ("bitfinex", "hyperliquid"):
         index = perp["index"]
     elif args.iv == "volmex":
         index = data.fetch_volmex_bviv(args.start, args.end)
@@ -459,7 +460,7 @@ def main():
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--start", default="2024-04")
     ap.add_argument("--end", default="2026-09")
-    ap.add_argument("--iv", default="bitfinex", help="bitfinex | volmex | dvol | path/to/bviv.csv")
+    ap.add_argument("--iv", default="bitfinex", help="bitfinex | hyperliquid | volmex | dvol | path/to/bviv.csv")
     ap.add_argument("--book", default="spot", choices=["spot", "perp"])
     args = ap.parse_args()
     if args.quick:

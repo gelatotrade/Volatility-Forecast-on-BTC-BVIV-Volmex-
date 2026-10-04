@@ -5,7 +5,8 @@ import pandas as pd
 
 from bvivhedge.data import (
     assemble_live_bars, regularise_klines, parse_binance_funding, parse_binance_klines, parse_bitfinex_candles,
-    parse_bitfinex_status, parse_deribit_dvol, parse_volmex_history,
+    parse_bitfinex_status, parse_deribit_dvol, parse_hyperliquid_candles, parse_hyperliquid_funding,
+    parse_volmex_history,
 )
 
 
@@ -73,3 +74,14 @@ def test_live_bars_trim_to_index_and_accrue_funding_forward():
     assert bars.index[0] == idx[10] and bars.index[-1] == idx[149]
     # the rate settled at 16:00 accrues from 08:00 onwards
     assert np.isclose(bars.loc[pd.Timestamp("2024-01-01 09:00", tz="UTC"), "btc_funding"], 3e-4 * 3 * 365)
+
+
+def test_hyperliquid_parsers():
+    rows = [{"t": 1758412800000, "T": 1758413699999, "s": "mkts:BVIV", "i": "15m",
+             "o": "38.10", "c": "38.45", "h": "38.60", "l": "38.00", "v": "1520.5", "n": 42}]
+    c = parse_hyperliquid_candles(json.dumps(rows).encode())
+    assert c.index[0] == pd.Timestamp("2025-09-21", tz="UTC") and c["close"].iloc[0] == 38.45
+    f = parse_hyperliquid_funding(json.dumps([{"coin": "mkts:BVIV", "fundingRate": "0.0000125",
+                                                "premium": "0.0", "time": 1758416400000}]).encode())
+    assert np.isclose(f.iloc[0], 1.25e-5)
+    assert parse_hyperliquid_candles(b"[]").empty
