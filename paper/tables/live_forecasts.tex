@@ -1,0 +1,15 @@
+\begin{tabular}{@{}lrrrrrrrrr@{}}
+\toprule
+ & \multicolumn{3}{c}{$h=1$ day} & \multicolumn{3}{c}{$h=7$ days} & \multicolumn{3}{c}{$h=30$ days} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}
+Model & QL ratio & MZ $R^2$ & DM $t$ & QL ratio & MZ $R^2$ & DM $t$ & QL ratio & MZ $R^2$ & DM $t$ \\
+\midrule
+RW & 1.71 & 0.16 & 10.47 & 1.33 & 0.15 & 2.56 & 1.42 & 0.09 & 1.70 \\
+EWMA & 1.27 & 0.09 & 5.18 & 1.40 & 0.10 & 2.91 & 1.87 & 0.09 & 2.53 \\
+GARCH & 1.41 & 0.10 & 8.96 & 1.95 & 0.09 & 5.29 & 3.52 & 0.14 & 3.21 \\
+HAR & 1.00 & 0.21 & -- & 1.00 & 0.19 & -- & 1.00 & 0.02 & -- \\
+IV-raw & 1.24 & 0.15 & 6.07 & 1.06 & 0.22 & 0.79 & 0.91 & 0.26 & \ensuremath{-}0.65 \\
+IV & 1.17 & 0.15 & 2.72 & 1.02 & 0.20 & 0.15 & \textbf{0.84} & 0.18 & \ensuremath{-}1.54 \\
+HAR-IV & \textbf{0.96} & 0.26 & \ensuremath{-}2.25 & \textbf{0.95} & 0.25 & \ensuremath{-}0.74 & 0.92 & 0.16 & \ensuremath{-}0.60 \\
+\bottomrule
+\end{tabular}

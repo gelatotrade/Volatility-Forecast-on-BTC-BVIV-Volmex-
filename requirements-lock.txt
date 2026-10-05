@@ -1,0 +1,7 @@
+# exact versions that produced results/ and paper/ (Python 3.11.15)
+numpy==2.4.6
+pandas==3.0.6
+scipy==1.17.1
+matplotlib==3.11.2
+arch==8.0.0
+pytest==9.1.1

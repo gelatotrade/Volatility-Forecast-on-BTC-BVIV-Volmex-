@@ -2,8 +2,9 @@
 
 The book is long ``qty`` BTC (spot, or a perpetual that additionally pays
 funding).  The hedge is a long position of ``H`` BVIV-perpetual contracts, each
-paying one dollar per index point.  A position decided at the close of bar *t*
-is held over bar *t+1*; trades pay fees and slippage on traded notional.
+paying one dollar per index point.  A position executed at the close of bar *t*
+(decided ``exec_delay`` bars earlier) is held over bar *t+1*; trades pay fees and
+slippage on traded notional.
 
 Four rule families are compared:
 
@@ -46,6 +47,10 @@ class HedgeConfig:
     max_notional_frac: float = 0.5      # cap: hedge notional <= 50% of BTC notional
     warmup_days: int = 30               # no hedging before estimators have data
     cheapness_lookback_days: int = 180
+    exec_delay: int = 0                 # bars between decision and execution (live-data realism)
+    placebo_start_days: int | None = None  # placebo shifts are circular from this day on (default: warm-up end),
+                                           # so the evaluation window keeps the real number of triggers
+    warmup_bars: int | None = None      # no hedging before this bar (default: warm-up days), e.g. a listing time
 
     def with_(self, **changes) -> "HedgeConfig":
         return replace(self, **changes)
@@ -158,6 +163,22 @@ def build_signals(bars: pd.DataFrame, cfg: HedgeConfig, daily_rv_forecast: pd.Se
     return out
 
 
+def ratchet_trigger(z: np.ndarray, rule: Rule, cfg: HedgeConfig) -> np.ndarray:
+    """Breakdown bars of a ratchet; for a placebo, the same series circularly shifted.
+
+    The shift is circular within the whole weeks of the evaluated segment (from ``placebo_start_days``),
+    so the placebo keeps the number, clustering and hour-of-week profile of the real triggers there and
+    only their link to the market is broken.  The last (length mod 7) days keep their real triggers.
+    """
+    trigger = np.nan_to_num(z, nan=0.0) < rule.z_enter
+    if rule.placebo_shift_days:
+        i0 = (cfg.warmup_days if cfg.placebo_start_days is None else cfg.placebo_start_days) * BARS_PER_DAY
+        week = 7 * BARS_PER_DAY
+        i1 = i0 + (len(trigger) - i0) // week * week          # whole weeks: a wrapped trigger keeps its weekday
+        trigger[i0:i1] = np.roll(trigger[i0:i1], int(rule.placebo_shift_days * BARS_PER_DAY))
+    return trigger
+
+
 def target_hedge(bars: pd.DataFrame, sig: pd.DataFrame, rule: Rule, cfg: HedgeConfig) -> tuple[np.ndarray, np.ndarray]:
     """Target contracts per bar and the bars where a discrete switch forces a trade."""
     n = len(bars)
@@ -175,11 +196,7 @@ def target_hedge(bars: pd.DataFrame, sig: pd.DataFrame, rule: Rule, cfg: HedgeCo
         if rule.use_forecast:
             lo, hi = rule.size_bounds
             size = np.clip(np.exp(rule.size_gamma * sig["cheapness"].to_numpy()), lo, hi)
-        trigger = np.nan_to_num(z, nan=0.0) < rule.z_enter
-        if rule.placebo_shift_days:
-            # same number and clustering of triggers, timing scrambled: isolates the VWAP information
-            trigger = np.roll(trigger, int(rule.placebo_shift_days * BARS_PER_DAY))
-        overlay = ratchet(trigger, rule.halflife_days * BARS_PER_DAY)
+        overlay = ratchet(ratchet_trigger(z, rule, cfg), rule.halflife_days * BARS_PER_DAY)
         core = rule.floor * mv_all
         h = core + overlay * np.maximum(mv_down * size - core, 0.0)
     elif rule.kind == "oracle":
@@ -190,7 +207,7 @@ def target_hedge(bars: pd.DataFrame, sig: pd.DataFrame, rule: Rule, cfg: HedgeCo
     else:
         raise ValueError(f"unknown rule kind {rule.kind!r}")
     h = np.minimum(rule.scale * h, sig["cap"].to_numpy())
-    h[: cfg.warmup_days * BARS_PER_DAY] = 0.0
+    h[: cfg.warmup_days * BARS_PER_DAY if cfg.warmup_bars is None else cfg.warmup_bars] = 0.0
     return h, switch
 
 
@@ -210,8 +227,8 @@ def apply_rebalance_band(target: np.ndarray, switch: np.ndarray, band: float) ->
 def backtest(bars: pd.DataFrame, position: np.ndarray, cfg: HedgeConfig) -> pd.DataFrame:
     """Bar P&L in USD of the BTC leg, the hedge leg and trading costs.
 
-    ``position[t]`` contracts are decided at the close of bar t; they earn the
-    mark change and pay the funding of bar t+1.
+    ``position[t]`` contracts are held from the close of bar t (already shifted by
+    ``exec_delay``); they earn the mark change and pay the funding of bar t+1.
     """
     s = bars["close"].to_numpy()
     mark = bars["bviv_mark"].to_numpy()
@@ -223,11 +240,17 @@ def backtest(bars: pd.DataFrame, position: np.ndarray, cfg: HedgeConfig) -> pd.D
     funding = held * np.r_[0.0, bars["bviv_funding"].to_numpy()[:-1]]
     carry = held * np.r_[0.0, bars["bviv_carry"].to_numpy()[:-1]]
     hedge = held * np.r_[0.0, np.diff(mark)] - funding
-    traded = np.abs(np.diff(np.r_[0.0, position]))
+    change = np.diff(np.r_[0.0, position])
+    traded = np.abs(change)
     cost = traded * mark * (cfg.fee_bps + cfg.slippage_bps) / 1e4
+    basis = np.zeros(len(bars))
+    if "bviv_fill" in bars:
+        # fills at a quoted price other than the mark (e.g. the order-book mid): buying above the mark is a cost
+        basis = np.nan_to_num(change * (bars["bviv_fill"].to_numpy() - mark))
     return pd.DataFrame(
-        {"btc": btc, "hedge": hedge, "funding": funding, "carry": carry, "cost": cost, "position": position,
-         "notional": position * mark, "traded_notional": traded * mark, "btc_notional": cfg.qty * s},
+        {"btc": btc, "hedge": hedge, "funding": funding, "carry": carry, "cost": cost + basis, "basis": basis,
+         "position": position, "notional": position * mark, "traded_notional": traded * mark,
+         "btc_notional": cfg.qty * s},
         index=bars.index,
     )
 
@@ -242,5 +265,8 @@ def run_rules(bars: pd.DataFrame, cfg: HedgeConfig, rules=DEFAULT_RULES,
         if rule.kind == "oracle" and "regime" not in bars:
             continue
         target, switch = target_hedge(bars, sig, rule, cfg)
-        results[rule.name] = backtest(bars, apply_rebalance_band(target, switch, cfg.rebalance_band), cfg)
+        position = apply_rebalance_band(target, switch, cfg.rebalance_band)
+        if cfg.exec_delay:
+            position = np.r_[np.zeros(cfg.exec_delay), position[:-cfg.exec_delay]]
+        results[rule.name] = backtest(bars, position, cfg)
     return results, sig
