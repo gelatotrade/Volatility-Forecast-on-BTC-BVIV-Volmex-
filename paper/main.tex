@@ -54,10 +54,12 @@
 
 \begin{document}
 \maketitle
-\vspace{-1.2em}
+\vspace{0.4em}
 
 \begin{abstract}
 \noindent A perpetual future on the Volmex \BVIV{} index of Bitcoin implied volatility has traded on Bitfinex since April 2024. With 15-minute data from \LiveStart{} to \LiveEnd{}, including its complete Bitfinex record, we ask how BTC volatility should be forecast when a 30-day implied index is observable and whether a long-\BVIV{} position, possibly timed by a volume-weighted average price (VWAP) signal, hedges BTC. HAR augmented with implied variance is the best one-day forecast, ahead of HAR in every year (significantly only over the full window); HAR-IV leads at a week and the bias-corrected index at a month, neither significantly. With rules frozen on simulated training data and executed one bar after the signal at the mark, a minimum-variance \BVIV{} hedge reduced the expected shortfall (ES) of a long-BTC book by \LiveEsAlways\% (95\% block-bootstrap CI \LiveEsAlwaysLo--\LiveEsAlwaysHi\%), mostly on a handful of crash days in 2026. Funding settled at its $\pm$0.25\% cap in \LiveFundCapShare\% of 8-hour periods and cost a permanently long contract \LiveFundAnnualPts{} vol points a year; the perpetual traded a median \$\LiveMedianUsd{} a day, and on its best days the hedge of a single bitcoin exceeded the market's open interest. A VWAP ratchet added \LiveDRatchetAbs{} points of ES reduction (CI \LiveDRatchetCi), but placebos with the same triggers at shifted dates captured most of it: the gain is mainly extra downside exposure, which holding the ratchet's overlay permanently delivers too, with timing worth \LiveTiming{} points. A calibrated simulation with an arbitrage-free perpetual reproduces the best forecast at each horizon and the split between exposure and timing. \BVIV{} perpetuals worked as a crash hedge, but funding, execution speed and capacity, not signal design, decide what that hedge is worth.
+
+\medskip\noindent\textbf{Keywords:} Bitcoin, implied volatility, \BVIV{}, volatility forecasting, perpetual futures, hedging, VWAP.\quad\textbf{JEL:}~C22, C58, G11, G13, G17.
 \end{abstract}
 
 \section{Introduction}\label{sec:intro}
@@ -68,18 +70,19 @@ Whether long volatility hedges long BTC depends on the spot-vol correlation, whi
 
 \paragraph{Contributions.} (i) We provide, to our knowledge, the first evidence on hedging BTC with a tradable implied-volatility perpetual, including an exact reconstruction of its funding rule, its realised costs and its capacity. (ii) We compare seven forecasts of BTC realised volatility, three of which use the official \BVIV{} index. (iii) We test VWAP timing with rules frozen on simulated data, single-path block-bootstrap inference and a \emph{timing placebo} that splits a rule's edge into exposure and timing. (iv) A calibrated simulation with an arbitrage-free perpetual serves as a controlled experiment. A pipeline regenerates every number from public data, except one dated order-book snapshot.
 
+\newpage
 \section{The BVIV index and its perpetual}\label{sec:background}
 
 \paragraph{Index.} \BVIV{} is a 30-day constant-maturity implied-volatility index that applies the variance-swap replication of \citet{demeterfi1999guide} to Deribit and OKX options, smoothed by an EWMA with a half-life of one to two minutes, and is disseminated every second \citep{volmex2024iv}; we use its 15-minute closes. Deribit's DVOL applies a similar calculation to Deribit options alone \citep{deribit2021dvol}. Implied variance exceeds subsequent realised variance on average: \citet{almeida2024risk} estimate about 0.14 a year in variance units for 2017--22, consistent with \citet{alexander2021bitcoin} and the equity evidence of \citet{carr2009variance}.
 
-\paragraph{The Bitfinex perpetual.} One contract pays one dollar (USDt) per index point; the mark price is the index converted at USD/USDt and deviates from the official Volmex index by at most \LiveMarkGap\% on 95\% of 15-minute bars. Funding settles every eight hours. The status feed exposes the accrued premium $a$ of the perpetual over its mark, and the settled rates follow $\mathrm{sign}(a)\min\{\max(|a|-0.05\%,0),0.25\%\}$ exactly (largest deviation \LiveFitMax{} bp over all \LiveFundN{} settlements). The cap, 0.75\% of notional a day, binds often: in \LiveFundCapShare\% of settlements from April 2024 to October 2026, and longs paid on \LiveFundPosShare\%. A permanently long contract paid \LiveFundAnnualPts{} vol points a year on average (\LiveFundAnnualPct\% of notional), but the burden swung from \LiveFundPtsA{} points a year in 2024 (from April) and \LiveFundPtsB{} in 2025 to \LiveFundPtsC{} a year in 2026 (to October): longs \emph{received} \LiveFundQOne{} points in its first quarter and paid again from April, at \LiveFundRest{} points a year (Figure~\ref{fig:livemarket}). The market is tiny. The perpetual traded on \LiveDaysTraded{} of \LivePerpDays{} days, with a median daily volume of \$\LiveMedianUsd{} (mean \$\LiveMeanUsd), and only \LiveBarsTraded\% of 15-minute bars saw a trade. Its quoted mid sat a median \LivePremiumMedian\% above the mark, but dust orders at the top of the book put it more than 5\% away on \LiveMidWild\% of bars (up to +\LiveMidMax\%), so it is not an executable price.
-
-\begin{figure}[t]
+\begin{figure}[h]
 \centering
 \includegraphics[width=\linewidth]{figures/live_market}
 \caption{Live data, \LiveStart{} to \LiveEnd{}. Top: BTC (Binance). Middle: the official Volmex \BVIV{} index. Bottom: Bitfinex \BVIV{}-perpetual funding per 8-hour period (daily mean), paid by longs when positive.}
 \label{fig:livemarket}
 \end{figure}
+
+\paragraph{The Bitfinex perpetual.} One contract pays one dollar (USDt) per index point; the mark price is the index converted at USD/USDt and deviates from the official Volmex index by at most \LiveMarkGap\% on 95\% of 15-minute bars. Funding settles every eight hours. The status feed exposes the accrued premium $a$ of the perpetual over its mark, and the settled rates follow $\mathrm{sign}(a)\min\{\max(|a|-0.05\%,0),0.25\%\}$ exactly (largest deviation \LiveFitMax{} bp over all \LiveFundN{} settlements). The cap, 0.75\% of notional a day, binds often: in \LiveFundCapShare\% of settlements from April 2024 to October 2026, and longs paid on \LiveFundPosShare\%. A permanently long contract paid \LiveFundAnnualPts{} vol points a year on average (\LiveFundAnnualPct\% of notional), but the burden swung from \LiveFundPtsA{} points a year in 2024 (from April) and \LiveFundPtsB{} in 2025 to \LiveFundPtsC{} a year in 2026 (to October): longs \emph{received} \LiveFundQOne{} points in its first quarter and paid again from April, at \LiveFundRest{} points a year (Figure~\ref{fig:livemarket}). The market is tiny. The perpetual traded on \LiveDaysTraded{} of \LivePerpDays{} days, with a median daily volume of \$\LiveMedianUsd{} (mean \$\LiveMeanUsd), and only \LiveBarsTraded\% of 15-minute bars saw a trade. Its quoted mid sat a median \LivePremiumMedian\% above the mark, but dust orders at the top of the book put it more than 5\% away on \LiveMidWild\% of bars (up to +\LiveMidMax\%), so it is not an executable price.
 
 \section{Data and volatility forecasts}\label{sec:data}
 
