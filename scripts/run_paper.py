@@ -15,7 +15,9 @@ ratchet) -> placebo-grid (every ratchet configuration vs. its placebo) -> paper.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
+import platform
 import re
 import shutil
 import subprocess
@@ -42,6 +44,16 @@ RESULTS = ROOT / "results"
 PAPER = ROOT / "paper"
 SIM_DAYS = 900
 ROBUST_SEED0 = 20_000   # robustness scenarios run on their own, disjoint seed block
+PACKAGES = ("numpy", "pandas", "scipy", "arch", "statsmodels", "matplotlib")
+
+
+def record_environment(stage: str):
+    """Note in results/environment.json the Python and package versions that produced a stage's output."""
+    path = RESULTS / "environment.json"
+    env = json.loads(path.read_text()) if path.exists() else {}
+    env[stage] = {"python": platform.python_version(), **{m: importlib.metadata.version(m) for m in PACKAGES}}
+    path.write_text(json.dumps(env, indent=2, sort_keys=True) + "\n")
+
 
 def signed(x: float, nd: int = 2) -> str:
     """'+0.61' / '-1.67', but a value that rounds to zero prints as plain '0.00'."""
@@ -453,6 +465,7 @@ def live_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path, calib_si
         # forecasts
         "live ql one": ql(1, "HAR-IV"), "live dm one": dm(1, "HAR-IV"), "live ql iv one": ql(1, "IV"),
         "live dm one listing": signed(facts["forecast_from_listing"]["1"]["dm"]),
+        "live dm year b": signed(facts["forecast_by_year"]["2025"]["dm"]),
         "live ql year a": f"{facts['forecast_by_year']['2024']['ql_ratio']:.2f}",
         "live ql year b": f"{facts['forecast_by_year']['2025']['ql_ratio']:.2f}",
         "live ql year c": f"{facts['forecast_by_year']['2026']['ql_ratio']:.2f}",
@@ -484,8 +497,8 @@ def write_readme_results(live: pd.DataFrame, rows: list[tuple[str, str]], nums: 
         "funding and trading costs in % of BTC notional a year; turnover = perpetual notional traded per year over BTC notional.",
         "", *table, "",
         f"1. **Forecasting.** HAR with implied variance is the best one-day forecast (QLIKE {n['live_ql_one']} × HAR), ahead "
-        f"of HAR in every year but significantly only over the full window (Diebold–Mariano t = {n['live_dm_one']}; "
-        f"{n['live_dm_one_listing']} from the perpetual's listing). At 7 days HAR-IV ({n['live_ql_seven']} × HAR) and at 30 days the "
+        f"of HAR in every year, significantly over the full window (Diebold–Mariano t = {n['live_dm_one']}) and in 2025 "
+        f"({n['live_dm_year_b']}) but not from the perpetual's listing ({n['live_dm_one_listing']}). At 7 days HAR-IV ({n['live_ql_seven']} × HAR) and at 30 days the "
         f"bias-corrected index ({n['live_ql_thirty']} × HAR) lead, but not significantly. The simulation has the same winners.",
         f"2. **The hedge works, in crashes.** The minimum-variance hedge cut ES by {n['live_es_always']}% (95% block-bootstrap "
         f"CI {n['live_es_always_lo']}–{n['live_es_always_hi']}%) and the maximum drawdown from {n['live_mdd_unhedged']}% to "
@@ -547,18 +560,24 @@ def main():
 
     if args.stage in ("all", "train"):
         selection = stage_train(args.train_paths, params, cfg)
+        record_environment("train")
     else:
         selection = json.loads(sel_path.read_text())
     if args.stage in ("all", "train-delay"):
         stage_train_delay(args.train_paths, params, cfg)
+        record_environment("train-delay")
     if args.stage in ("all", "test"):
         stage_test(args.test_paths, params, cfg)
+        record_environment("test")
     if args.stage in ("all", "robust"):
         stage_robust(args.robust_paths, params, cfg, selection)
+        record_environment("robust")
     if args.stage in ("all", "placebo"):
         stage_placebo(args.test_paths, params, cfg, selection)
+        record_environment("placebo")
     if args.stage in ("all", "placebo-grid"):
         stage_placebo_grid(params, cfg)
+        record_environment("placebo-grid")
     if args.stage in ("all", "paper"):
         stage_paper(params, cfg, selection, compile_pdf=not args.no_pdf)
 

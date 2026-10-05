@@ -1,6 +1,9 @@
-"""Download and cache every live input of the study (idempotent; reruns only fetch what is missing).
+"""Download and cache every live input of the study (idempotent; a rerun with the same dates is offline).
 
     python scripts/fetch_data.py --start 2023-01-01 --end 2026-10-04
+
+``--end`` is exclusive.  Deribit BTC funding is only the fallback of scripts/run_live.py when the
+Bitfinex BTC perpetual is unavailable; fetch it with ``--only deribit``.
 """
 
 from __future__ import annotations
@@ -21,14 +24,14 @@ def main():
     ap.add_argument("--start", default="2023-01-01")
     ap.add_argument("--perp-start", default="2024-04-01")
     ap.add_argument("--end", default="2026-10-04")
-    ap.add_argument("--only", nargs="*", default=["binance", "volmex", "bitfinex", "btcperp", "candles", "deribit"])
+    ap.add_argument("--only", nargs="*", default=["binance", "volmex", "bitfinex", "btcperp", "candles"])
     a = ap.parse_args()
     t = time.time()
     if "volmex" in a.only:
         s = data.fetch_volmex_public(a.start, a.end)
         print(f"volmex BVIV: {len(s)} bars {s.index[0]} .. {s.index[-1]}  ({time.time() - t:.0f}s)", flush=True)
     if "binance" in a.only:
-        k = data.fetch_binance_klines(a.start[:7], a.end[:7])
+        k = data.fetch_binance_klines(a.start[:7], a.end[:7], until=a.end)
         print(f"binance BTCUSDT 15m: {len(k)} bars {k.index[0]} .. {k.index[-1]}  ({time.time() - t:.0f}s)", flush=True)
     if "deribit" in a.only:
         f = data.fetch_deribit_funding(a.start, a.end)

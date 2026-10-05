@@ -24,7 +24,7 @@ Live data, 3 April 2024 to 3 October 2026 (914 days): a 1-BTC spot book hedged w
 | VWAP-switch | 18.8% | 12.6% | 42.5% | +6.71 | −0.26 | 5.17 | 32.3× |
 | VWAP-ratchet (MV core + breakdown overlay) | 20.3% | 15.0% | 42.6% | +1.35 | 2.67 | 0.37 | 2.3× |
 
-1. **Forecasting.** HAR with implied variance is the best one-day forecast (QLIKE 0.96 × HAR), ahead of HAR in every year but significantly only over the full window (Diebold–Mariano t = −2.25; −1.83 from the perpetual's listing). At 7 days HAR-IV (0.95 × HAR) and at 30 days the bias-corrected index (0.84 × HAR) lead, but not significantly. The simulation has the same winners.
+1. **Forecasting.** HAR with implied variance is the best one-day forecast (QLIKE 0.96 × HAR), ahead of HAR in every year, significantly over the full window (Diebold–Mariano t = −2.25) and in 2025 (−2.66) but not from the perpetual's listing (−1.83). At 7 days HAR-IV (0.95 × HAR) and at 30 days the bias-corrected index (0.84 × HAR) lead, but not significantly. The simulation has the same winners.
 2. **The hedge works, in crashes.** The minimum-variance hedge cut ES by 17.9% (95% block-bootstrap CI 6.2–32.4%) and the maximum drawdown from 53.0% to 41.7%. By year: 6.3% (2024), 10.0% (2025), 52.3% (2026); without its best day, 11.9%.
 3. **Funding is the price.** Bitfinex funding settled at its ±0.25% cap in 41% of 2,740 eight-hour periods; a permanently long contract paid 24 vol points a year (annualised: 46 in 2024 from April, 34 in 2025, −12 in 2026 to October, when longs received 22 points in the first quarter and paid again from April).
 4. **Capacity and speed are the limits.** The perpetual traded a median $71 a day; when held, the hedge of one BTC was a median 248 contracts against a median open interest of 103. On 4 October 2026, a day after the sample, the book held the hedge of about 4 BTC within 2.5% of the mid; trading one BTC's hedge cost about 0.50% per side in price impact. Executing one hour late cut the ES reduction to 16.0%, one day late to 12.6%.
@@ -79,7 +79,8 @@ src/bvivhedge/
   plots.py, report.py  figures, LaTeX tables, number macros
 tests/                 41 tests: accounting identities, causality, index expectation, perp fairness,
                        placebo trigger counts, funding reconstruction and timing, parsers
-results/               live results (results/live/), cached Monte Carlo results, the rule selection
+results/               live results (results/live/), cached Monte Carlo results, the rule selection,
+                       the package versions behind each run (environment.json, live/facts.json)
 ```
 
 ## Reproduce

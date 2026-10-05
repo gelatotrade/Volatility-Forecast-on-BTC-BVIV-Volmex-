@@ -258,7 +258,7 @@ def main():
              "funding_2026": funding_split_2026(events),
              "btc_funding_source": panel["btc_funding_source"],
              "environment": {"python": platform.python_version(),
-                             **{m: importlib.metadata.version(m) for m in ("numpy", "pandas", "scipy", "arch", "matplotlib")}},
+                             **{m: importlib.metadata.version(m) for m in ("numpy", "pandas", "scipy", "arch", "statsmodels", "matplotlib")}},
              "baseline": {"exec_delay_bars": cfg.exec_delay, "fills": "mark", "fee_bps": args.fee,
                           "slippage_bps": args.slippage}}
 
