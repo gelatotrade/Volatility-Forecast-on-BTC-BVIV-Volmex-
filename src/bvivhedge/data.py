@@ -313,17 +313,22 @@ def parse_deribit_funding(payload: bytes) -> pd.Series:
 
 
 def fetch_deribit_funding(start: str, end: str, instrument: str = "BTC-PERPETUAL") -> pd.Series:
-    """Hourly realised funding of the Deribit BTC perpetual (fraction of notional per hour)."""
+    """Hourly realised funding of the Deribit BTC perpetual (fraction of notional per hour), ``end`` exclusive."""
     parts = []
-    for month in pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M"):
+    stop = pd.Timestamp(end)
+    for month in pd.period_range(pd.Timestamp(start).to_period("M"), stop.to_period("M"), freq="M"):
         for half in (0, 1):                                    # the endpoint caps the number of rows
             a = month.start_time + pd.Timedelta(days=15 * half)
-            b = month.start_time + pd.Timedelta(days=15) if half == 0 else (month + 1).start_time
+            full = month.start_time + pd.Timedelta(days=15) if half == 0 else (month + 1).start_time
+            if a >= stop:                                       # the half-month lies after the sample
+                continue
+            b = min(full, stop)
             t0, t1 = int(a.tz_localize("UTC").timestamp() * 1000), int(b.tz_localize("UTC").timestamp() * 1000)
             url = (f"https://www.deribit.com/api/v2/public/get_funding_rate_history?instrument_name={instrument}"
                    f"&start_timestamp={t0}&end_timestamp={t1}")
+            name = f"deribit_funding_{instrument}_{t0}" + ("" if b == full else f"_to_{t1}") + ".json"
             complete = b.tz_localize("UTC") <= pd.Timestamp.now(tz="UTC")
-            blob = _cached(f"deribit_funding_{instrument}_{t0}.json", lambda u=url: _get(u)) if complete else _get(url)
+            blob = _cached(name, lambda u=url: _get(u)) if complete else _get(url)
             parts.append(parse_deribit_funding(blob))
     s = pd.concat(parts).sort_index()
     return s[~s.index.duplicated()]

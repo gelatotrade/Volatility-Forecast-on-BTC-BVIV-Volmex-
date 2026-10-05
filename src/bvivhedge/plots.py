@@ -55,6 +55,7 @@ plt.rcParams.update({
 })
 
 WIDTH = 6.3  # inches, the paper's text width
+UNSTAMPED = {"CreationDate": None}  # no timestamp, so a rerun writes byte-identical figures
 
 
 def fig_live_market(daily: pd.DataFrame, perp_start: pd.Timestamp, path: str):
@@ -84,7 +85,7 @@ def fig_live_market(daily: pd.DataFrame, perp_start: pd.Timestamp, path: str):
     ax.xaxis.set_major_locator(matplotlib.dates.YearLocator())
     ax.xaxis.set_minor_locator(matplotlib.dates.MonthLocator(bymonth=(4, 7, 10)))
     ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%Y"))
-    fig.savefig(path)
+    fig.savefig(path, metadata=UNSTAMPED)
     plt.close(fig)
 
 
@@ -119,7 +120,7 @@ def fig_live_episode(ep: pd.DataFrame, z_enter: float, names: dict[str, str], pa
     ax.xaxis.set_major_locator(matplotlib.dates.DayLocator())
     ax.xaxis.set_minor_locator(matplotlib.dates.HourLocator(byhour=(6, 12, 18)))
     ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d %b"))
-    fig.savefig(path)
+    fig.savefig(path, metadata=UNSTAMPED)
     plt.close(fig)
 
 
@@ -136,7 +137,7 @@ def fig_live_hedge(daily: pd.DataFrame, key: str, path: str):
     ax.legend(loc="upper left", handlelength=1.4)
     ax.xaxis.set_major_locator(matplotlib.dates.MonthLocator(bymonth=(1, 4, 7, 10)))
     ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%b\n%Y"))
-    fig.savefig(path)
+    fig.savefig(path, metadata=UNSTAMPED)
     plt.close(fig)
 
 
@@ -164,5 +165,5 @@ def fig_live_timing(placebo: pd.DataFrame, real: float, grid: pd.DataFrame, path
     ax.set_title("Timing value by core hedge", color=INK)
     ax.set_ylabel("ES red. minus placebo (pp)")
     ax.grid(axis="x", visible=False)
-    fig.savefig(path)
+    fig.savefig(path, metadata=UNSTAMPED)
     plt.close(fig)
