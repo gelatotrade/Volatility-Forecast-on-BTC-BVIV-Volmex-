@@ -59,7 +59,7 @@ def btc_perp_funding(events: pd.DataFrame, index: pd.DatetimeIndex) -> pd.Series
 
 def build_panel(start: str = "2023-01-01", end: str = "2026-10-04", perp_start: str | None = None) -> dict:
     """All live inputs on one 15m grid, plus the raw funding events for reporting."""
-    klines = data.fetch_binance_klines(start[:7], end[:7])
+    klines = data.fetch_binance_klines(start[:7], end[:7], until=end)
     index = data.fetch_volmex_public(start, end)
     status = data.fetch_bitfinex_status(BVIV_PERP, "2024-04-01", end)
     events = data.bitfinex_funding_events(status)

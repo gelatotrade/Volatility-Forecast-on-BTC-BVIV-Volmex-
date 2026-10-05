@@ -98,22 +98,35 @@ def parse_binance_klines(csv_bytes: bytes) -> pd.DataFrame:
     return out
 
 
-def fetch_binance_klines(start: str, end: str, symbol: str = "BTCUSDT", market: str = "spot") -> pd.DataFrame:
-    """15m klines from the monthly bulk archive, ``start``/``end`` as 'YYYY-MM' (inclusive)."""
+def fetch_binance_klines(start: str, end: str, symbol: str = "BTCUSDT", market: str = "spot",
+                         until: str | None = None) -> pd.DataFrame:
+    """15m klines from the monthly bulk archive, ``start``/``end`` as 'YYYY-MM' (inclusive).
+
+    ``until`` (a date, exclusive) stops the daily fallback at the end of the sample, so a month whose
+    daily files are all cached is read without touching the network.
+    """
     base = {"spot": "spot", "perp": "futures/um"}[market]
     frames = []
-    today = pd.Timestamp.now(tz="UTC").floor("1D")
+    stop = pd.Timestamp.now(tz="UTC").floor("1D")
+    if until is not None:
+        stop = min(stop, pd.Timestamp(until, tz="UTC"))
     for month in pd.period_range(start, end, freq="M"):
         fname = f"{symbol}-15m-{month.year}-{month.month:02d}.zip"
         url = f"https://data.binance.vision/data/{base}/monthly/klines/{symbol}/15m/{fname}"
+        days = [d for d in pd.date_range(month.start_time, month.end_time.normalize(), freq="D")
+                if d.tz_localize("UTC") < stop]
+        if not days:                                            # the month lies entirely after the sample
+            continue
+        daily_names = [f"binance_{market}_{symbol}-15m-{d:%Y-%m-%d}.zip" for d in days]
+        cached_daily = not (RAW / f"binance_{market}_{fname}").exists() and all((RAW / n).exists() for n in daily_names)
         try:
+            if cached_daily:
+                raise FileNotFoundError("use the cached daily files")
             blobs = [_cached(f"binance_{market}_{fname}", lambda u=url: _get(u, retries=1))]
         except Exception:
             # the monthly file appears a few days after month end: fall back to daily files
             blobs = []
-            for day in pd.date_range(month.start_time, month.end_time.normalize(), freq="D"):
-                if day.tz_localize("UTC") >= today:
-                    break
+            for day in days:
                 dname = f"{symbol}-15m-{day:%Y-%m-%d}.zip"
                 durl = f"https://data.binance.vision/data/{base}/daily/klines/{symbol}/15m/{dname}"
                 blobs.append(_cached(f"binance_{market}_{dname}", lambda u=durl: _get(u)))

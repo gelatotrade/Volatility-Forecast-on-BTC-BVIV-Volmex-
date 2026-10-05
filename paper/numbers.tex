@@ -17,7 +17,7 @@
 \newcommand{\DEsRatchet}{+0.53}
 \newcommand{\DEsRatchetLo}{+0.33}
 \newcommand{\DEsRatchetHi}{+0.72}
-\newcommand{\DEsSwitchAbs}{1.67}
+\newcommand{\DEsSwitch}{\ensuremath{-}1.67}
 \newcommand{\DEsSwitchLo}{\ensuremath{-}2.00}
 \newcommand{\DEsSwitchHi}{\ensuremath{-}1.36}
 \newcommand{\DEsPlacebo}{+0.05}
@@ -31,39 +31,14 @@
 \newcommand{\RobCostMax}{+0.67}
 \newcommand{\PgridPaths}{64}
 \newcommand{\PgridShifts}{3}
+\newcommand{\TrainMargin}{0.02}
+\newcommand{\DelayRatchetZ}{\ensuremath{-}1}
+\newcommand{\DelayRatchetTiming}{+0.11}
 \newcommand{\RobBaseline}{+0.66}
 \newcommand{\RobLoBaseline}{+0.39}
 \newcommand{\RobHiBaseline}{+0.94}
-\newcommand{\RobTradingCostsDouble}{+0.63}
-\newcommand{\RobLoTradingCostsDouble}{+0.37}
-\newcommand{\RobHiTradingCostsDouble}{+0.91}
-\newcommand{\RobTradingCostsHalf}{+0.67}
-\newcommand{\RobLoTradingCostsHalf}{+0.41}
-\newcommand{\RobHiTradingCostsHalf}{+0.95}
-\newcommand{\RobFundingCarryZero}{+0.67}
-\newcommand{\RobLoFundingCarryZero}{+0.40}
-\newcommand{\RobHiFundingCarryZero}{+0.95}
-\newcommand{\RobFundingCarryTwelve}{+0.65}
-\newcommand{\RobLoFundingCarryTwelve}{+0.38}
-\newcommand{\RobHiFundingCarryTwelve}{+0.93}
-\newcommand{\RobFundingCarryTwentyfour}{+0.63}
-\newcommand{\RobLoFundingCarryTwentyfour}{+0.36}
-\newcommand{\RobHiFundingCarryTwentyfour}{+0.91}
-\newcommand{\RobVixLikeSpotVol}{+0.74}
-\newcommand{\RobLoVixLikeSpotVol}{+0.47}
-\newcommand{\RobHiVixLikeSpotVol}{+1.03}
 \newcommand{\RobInverseLeverage}{+0.18}
-\newcommand{\RobLoInverseLeverage}{\ensuremath{-}0.02}
-\newcommand{\RobHiInverseLeverage}{+0.39}
 \newcommand{\RobCrashesClusterInStress}{+0.34}
-\newcommand{\RobLoCrashesClusterInStress}{0.00}
-\newcommand{\RobHiCrashesClusterInStress}{+0.68}
-\newcommand{\RobSessionAnchoredVwap}{+0.73}
-\newcommand{\RobLoSessionAnchoredVwap}{+0.44}
-\newcommand{\RobHiSessionAnchoredVwap}{+1.02}
-\newcommand{\RobPerpetualBtcBook}{+0.64}
-\newcommand{\RobLoPerpetualBtcBook}{+0.38}
-\newcommand{\RobHiPerpetualBtcBook}{+0.92}
 \newcommand{\LiveStart}{1 January 2023}
 \newcommand{\LiveEnd}{3 October 2026}
 \newcommand{\LiveDays}{1{,}372}
@@ -76,7 +51,7 @@
 \newcommand{\LiveIvMax}{88.5}
 \newcommand{\LiveIvAbove}{75}
 \newcommand{\LiveAc}{0.20}
-\newcommand{\LiveLagShare}{41}
+\newcommand{\LiveLagShare}{39}
 \newcommand{\LiveCorrDaily}{\ensuremath{-}0.10}
 \newcommand{\LiveCorrA}{+0.32}
 \newcommand{\LiveCorrB}{+0.03}
@@ -90,8 +65,9 @@
 \newcommand{\LiveFundPtsA}{46}
 \newcommand{\LiveFundPtsB}{34}
 \newcommand{\LiveFundPtsC}{\ensuremath{-}12}
+\newcommand{\LiveFundQOne}{22}
+\newcommand{\LiveFundRest}{26}
 \newcommand{\LiveFitMax}{0.05}
-\newcommand{\LiveFitExact}{77}
 \newcommand{\LiveDaysTraded}{576}
 \newcommand{\LivePerpDays}{914}
 \newcommand{\LiveBarsTraded}{4.4}
@@ -103,14 +79,9 @@
 \newcommand{\LiveMarkGap}{0.15}
 \newcommand{\LiveEsAlways}{17.9}
 \newcommand{\LiveVarAlways}{14.9}
-\newcommand{\LiveEsOnehalf}{20.1}
-\newcommand{\LiveEsSwitch}{18.8}
-\newcommand{\LiveEsRatchet}{20.3}
 \newcommand{\LiveMddUnhedged}{53.0}
 \newcommand{\LiveMddAlways}{41.7}
 \newcommand{\LiveTurnSwitch}{32.3}
-\newcommand{\LiveCostSwitch}{5.17}
-\newcommand{\LiveNetSwitch}{+1.5}
 \newcommand{\LiveNotionalAlways}{11.1}
 \newcommand{\LiveTimeOnAlways}{67}
 \newcommand{\LiveFundAlways}{1.4}
@@ -125,12 +96,15 @@
 \newcommand{\LiveBlockLoMax}{7.3}
 \newcommand{\LiveDRatchet}{+2.37}
 \newcommand{\LiveDRatchetCi}{[\ensuremath{-}0.22, +4.89]}
+\newcommand{\LiveDRatchetAbs}{2.37}
+\newcommand{\LiveHeldD}{+0.26}
+\newcommand{\LiveHeldDCi}{[\ensuremath{-}0.94, +1.81]}
+\newcommand{\LivePlMatchedD}{1.3}
+\newcommand{\LivePlMatchedCi}{[\ensuremath{-}0.73, +3.01]}
 \newcommand{\LiveDRatchetHalf}{+0.17}
 \newcommand{\LiveDRatchetHalfCi}{[\ensuremath{-}1.74, +2.35]}
 \newcommand{\LiveDSwitch}{+0.92}
 \newcommand{\LiveDSwitchCi}{[\ensuremath{-}2.71, +3.54]}
-\newcommand{\LiveDOnehalf}{+2.19}
-\newcommand{\LiveDOnehalfCi}{[\ensuremath{-}0.91, +4.66]}
 \newcommand{\LiveHedgeTotal}{+5.3}
 \newcommand{\LiveTopTen}{51}
 \newcommand{\LiveExTopTen}{\ensuremath{-}46}
@@ -161,7 +135,6 @@
 \newcommand{\LiveEpOpenMin}{558}
 \newcommand{\LiveEpOpenMax}{609}
 \newcommand{\LiveEpCloseAlways}{205}
-\newcommand{\LiveEpRatchetMin}{0}
 \newcommand{\LiveEpRatchetMax}{20}
 \newcommand{\LivePlaceboN}{129}
 \newcommand{\LivePlaceboBeaten}{87}
@@ -169,6 +142,7 @@
 \newcommand{\LiveSize}{+2.03}
 \newcommand{\LivePlaceboMean}{19.9}
 \newcommand{\LiveGridSigOne}{10}
+\newcommand{\LiveGridExposureShare}{66}
 \newcommand{\LiveGridNOne}{24}
 \newcommand{\LivePlaceboLo}{19.1}
 \newcommand{\LivePlaceboHi}{20.4}
@@ -180,34 +154,23 @@
 \newcommand{\LiveGridRankOne}{83}
 \newcommand{\LiveSamePlacebo}{98}
 \newcommand{\LiveMidPlacebo}{71}
-\newcommand{\LiveSameDRatchet}{+2.08}
-\newcommand{\LiveSameDRatchetCi}{[+0.04, +3.90]}
-\newcommand{\LiveMidDRatchet}{+2.50}
-\newcommand{\LiveMidDRatchetCi}{[\ensuremath{-}0.23, +5.30]}
 \newcommand{\LiveSameEsAlways}{19.1}
-\newcommand{\LiveSameEsRatchet}{21.1}
-\newcommand{\LiveMidEsSwitch}{18.4}
 \newcommand{\LiveDelayHour}{16.0}
 \newcommand{\LiveDelayDay}{12.6}
-\newcommand{\LiveSameNetSwitch}{+7.6}
 \newcommand{\LiveBookCostSwitch}{18.1}
-\newcommand{\LiveBookNetSwitch}{\ensuremath{-}11.4}
 \newcommand{\LiveContracts}{248}
 \newcommand{\LiveMedianOi}{103}
 \newcommand{\LiveAboveOi}{61}
 \newcommand{\LiveAboveOiAll}{41}
 \newcommand{\LiveMaxNotional}{64}
 \newcommand{\LiveMaxNotionalHalf}{72}
-\newcommand{\LiveOiMultipleLo}{2}
+\newcommand{\LiveOiMultipleLo}{1.7}
 \newcommand{\LiveOiMultipleHi}{23}
 \newcommand{\LiveBestTraded}{353}
 \newcommand{\LiveBestMarket}{18}
 \newcommand{\LiveDeadAlways}{30}
-\newcommand{\LiveDeadSwitch}{35}
 \newcommand{\LiveBookDate}{4 October 2026}
 \newcommand{\LiveBookBuy}{0.50}
-\newcommand{\LiveBookSell}{0.50}
-\newcommand{\LiveBookTopSpread}{0.34}
 \newcommand{\LiveBookSizeSpread}{1.00}
 \newcommand{\LiveMatchedScale}{1.13}
 \newcommand{\LiveMatchedEs}{18.6}
@@ -221,6 +184,10 @@
 \newcommand{\LiveQlOne}{0.96}
 \newcommand{\LiveDmOne}{\ensuremath{-}2.25}
 \newcommand{\LiveQlIvOne}{1.17}
+\newcommand{\LiveDmOneListing}{\ensuremath{-}1.83}
+\newcommand{\LiveQlYearA}{0.99}
+\newcommand{\LiveQlYearB}{0.93}
+\newcommand{\LiveQlYearC}{0.95}
 \newcommand{\LiveQlSeven}{0.95}
 \newcommand{\LiveDmSeven}{\ensuremath{-}0.74}
 \newcommand{\LiveQlIvSeven}{1.02}

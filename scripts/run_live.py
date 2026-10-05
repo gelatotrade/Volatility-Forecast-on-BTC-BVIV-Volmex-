@@ -15,8 +15,10 @@ top of the book, no trade on 96% of bars); both are reported as sensitivities.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
+import platform
 import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor
@@ -32,6 +34,7 @@ warnings.filterwarnings("ignore")
 
 from bvivhedge import data, live  # noqa: E402
 from bvivhedge.experiments import Protocol, analyse, rule_from_key, rule_grid  # noqa: E402
+from bvivhedge.forecast import evaluate  # noqa: E402
 from bvivhedge.hedge import HedgeConfig, Rule, run_rules  # noqa: E402
 from bvivhedge.metrics import book_metrics, daily_book, expected_shortfall  # noqa: E402
 from bvivhedge.realized import daily_realized  # noqa: E402
@@ -63,7 +66,7 @@ def bar_close(t: pd.Timestamp) -> str:
 
 
 # --------------------------------------------------------------------------- descriptive facts
-def stylised_facts(bars: pd.DataFrame, daily: pd.DataFrame, eval_start: pd.Timestamp) -> dict:
+def stylised_facts(bars: pd.DataFrame, daily: pd.DataFrame) -> dict:
     iv_d = bars["bviv"].resample("1D").last().reindex(daily.index)
     rv30 = daily["rv"][::-1].rolling(30).mean()[::-1].shift(-1)
     gap = iv_d - np.sqrt(rv30 * 365) * 100
@@ -80,7 +83,8 @@ def stylised_facts(bars: pd.DataFrame, daily: pd.DataFrame, eval_start: pd.Times
         "ac1_15m_iv": float(d_iv.autocorr(1)),
     }
     # the index lags BTC: how much of its response to a 15m return arrives in the three bars after it
-    rr, dd = r.loc[eval_start:], bars["bviv_mark"].diff().loc[eval_start:]
+    # (same series and window as the AC(1) above: the Volmex index over the full sample)
+    rr, dd = r, d_iv
     slope = [float(np.polyfit(rr.iloc[1:-3].to_numpy(), dd.shift(-k).iloc[1:-3].to_numpy(), 1)[0]) for k in range(4)]
     out["lag_corr"] = [float(rr.corr(dd.shift(-k))) for k in range(4)]
     out["lag_share_after"] = float(100 * sum(slope[1:]) / sum(slope))
@@ -159,6 +163,37 @@ def book_facts(contracts: float) -> dict:
             "btc_capacity_2_5pct": float(min(ask_depth, bid_depth) / contracts)}
 
 
+def funding_split_2026(events: pd.DataFrame) -> dict:
+    """2026 in two parts: the first quarter, when longs received funding, and April onwards."""
+    pts = events["rate"] * events["mark"]
+    q1, rest = pts.loc["2026-01-01":"2026-03-31 23:59"], pts.loc["2026-04-01":]
+    return {"q1_points": float(q1.sum()), "q1_annual_points": float(q1.mean() * 3 * 365),
+            "rest_annual_points": float(rest.mean() * 3 * 365), "rest_share_positive": float(100 * (rest > 0).mean())}
+
+
+def _es_red_rows(r: np.ndarray, u: np.ndarray, level: float = 0.975) -> np.ndarray:
+    """ES reduction of each row of r against u (same convention as metrics.expected_shortfall)."""
+    q = np.quantile(r, 1 - level, axis=1, keepdims=True)
+    es_r = -np.where(r <= q, r, np.nan)
+    es_r = np.nanmean(es_r, axis=1)
+    qu = np.quantile(u, 1 - level)
+    return 100 * (1 - es_r / -u[u <= qu].mean())
+
+
+def placebo_mean_bootstrap(placebos: list[pd.Series], other: pd.Series, base: pd.Series,
+                           n_boot: int = 2000, block: float = 10.0, seed: int = 0) -> dict:
+    """CI for (mean ES reduction of the placebos) - (ES reduction of ``other``), resampling the same days for all."""
+    rng = np.random.default_rng(seed)
+    p, o, u = np.array([x.to_numpy() for x in placebos]), other.to_numpy(), base.to_numpy()
+    point = _es_red_rows(p, u).mean() - es_red(o, u)
+    draws = np.empty(n_boot)
+    for i in range(n_boot):
+        j = live.stationary_bootstrap_index(len(u), block, rng)
+        draws[i] = _es_red_rows(p[:, j], u[j]).mean() - es_red(o[j], u[j])
+    return {"diff": float(point), "lo": float(np.quantile(draws, 0.025)), "hi": float(np.quantile(draws, 0.975)),
+            "p_le0": float((draws <= 0).mean())}
+
+
 # --------------------------------------------------------------------------- hedging
 def daily_books(results: dict, start: pd.Timestamp) -> dict:
     return {k: daily_book(v).loc[start:] for k, v in results.items()}
@@ -217,10 +252,13 @@ def main():
     daily = daily_realized(bars)
     eval_days = len(daily) - days_to_perp
     events = panel["events"]
-    facts = {"stylised": stylised_facts(bars, daily, perp_start), "perp": perp_facts(panel, candles_1d, candles_15m),
+    facts = {"stylised": stylised_facts(bars, daily), "perp": perp_facts(panel, candles_1d, candles_15m),
              "funding": live.funding_summary(events), "funding_fit": funding_fit(events),
              "funding_by_year": {str(y): live.funding_summary(g) for y, g in events.groupby(events.index.year)},
+             "funding_2026": funding_split_2026(events),
              "btc_funding_source": panel["btc_funding_source"],
+             "environment": {"python": platform.python_version(),
+                             **{m: importlib.metadata.version(m) for m in ("numpy", "pandas", "scipy", "arch", "matplotlib")}},
              "baseline": {"exec_delay_bars": cfg.exec_delay, "fills": "mark", "fee_bps": args.fee,
                           "slippage_bps": args.slippage}}
 
@@ -249,6 +287,17 @@ def main():
     evals = pd.concat([ev.assign(h=h).rename_axis("model").reset_index() for h, ev in out["evals"].items()])
     evals.to_csv(OUT / "forecast_evals.csv", index=False)
     facts["forecast_n"] = {str(h): int(ev.attrs.get("n", 0)) for h, ev in out["evals"].items()}
+
+    # ---- how robust is the forecast ranking: from the perpetual's listing on, and year by year (h = 1)
+    def har_iv_vs_har(ev: pd.DataFrame) -> dict:
+        return {"ql_ratio": float(ev.loc["HAR-IV", "qlike"] / ev.loc["HAR", "qlike"]),
+                "dm": float(ev.loc["HAR-IV", "dm_vs_HAR"]), "n": int(ev.attrs["n"])}
+
+    facts["forecast_from_listing"] = {str(h): har_iv_vs_har(evaluate(out["forecasts"][h], h=h, start=perp_start))
+                                      for h in (1, 7)}
+    fc1 = out["forecasts"][1]
+    facts["forecast_by_year"] = {str(y): har_iv_vs_har(evaluate(fc1.loc[:f"{y}-12-31"], h=1, start=f"{y}-01-01"))
+                                 for y in (2024, 2025, 2026)}
     print(metrics.loc[[k for k in metrics.index if not k.startswith("placebo|")],
                       ["es_red", "var_red", "mdd", "hedge_pnl", "funding", "cost", "turnover", "notional"]].round(2), flush=True)
 
@@ -263,6 +312,11 @@ def main():
             books, "Unhedged", es_red, "always|1", "Unhedged", block=float(block))
         boot[f"{rt} - always|1 (es, block {block:g})"] = live.paired_block_bootstrap(
             books, "Unhedged", es_red, rt, "always|1", block=float(block))
+    # the untimed benchmarks against the timed rules, on the same resampled days
+    boot["overlay|held - " + rt + " (es)"] = live.paired_block_bootstrap({**books, **bench_books}, "Unhedged", es_red,
+                                                                       "overlay|held", rt)
+    boot["placebo mean - always|matched (es)"] = placebo_mean_bootstrap(
+        [placebo_books[p.name]["total"] for p in placebos], bench_books["always|matched"]["total"], books["Unhedged"]["total"])
     (OUT / "bootstrap.json").write_text(json.dumps(boot, indent=2))
 
     # ---- placebo distribution for the selected ratchet
@@ -309,8 +363,8 @@ def main():
     sens = {}
     base_rules = rules
     for label, b, c in (("same-bar execution", bars, cfg.with_(exec_delay=0)),
-                        ("execution 1 hour later", bars, cfg.with_(exec_delay=4)),
-                        ("execution 1 day later", bars, cfg.with_(exec_delay=96)),
+                        ("execution 1 hour after the signal", bars, cfg.with_(exec_delay=4)),
+                        ("execution 1 day after the signal", bars, cfg.with_(exec_delay=96)),
                         ("fills at the quoted mid", mid_fill, cfg),
                         ("book costs", bars, cfg.with_(slippage_bps=BOOK_COST_BPS)),
                         ("no trading costs", bars, cfg.with_(fee_bps=0, slippage_bps=0)),

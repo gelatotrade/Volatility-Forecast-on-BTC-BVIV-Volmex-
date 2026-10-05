@@ -65,6 +65,17 @@ def stage_train(n: int, params: MarketParams, cfg: HedgeConfig) -> dict[str, str
     return selection
 
 
+def stage_train_delay(n: int, params: MarketParams, cfg: HedgeConfig):
+    """The training grid again with one-bar execution (as on live data): how robust is the frozen selection?
+
+    Writes results/train_grid_metrics_delay1.csv only; results/selection.json is never touched.
+    """
+    seeds = range(TRAIN_SEED0, TRAIN_SEED0 + n)
+    mc = monte_carlo(seeds, params, cfg.with_(exec_delay=1), rule_grid(), Protocol(full_forecasts=False))
+    mc["metrics"].to_csv(RESULTS / "train_grid_metrics_delay1.csv", index=False)
+    print("selection under one-bar execution:", select_rules(mc["metrics"]))
+
+
 def stage_test(n: int, params: MarketParams, cfg: HedgeConfig):
     mc = monte_carlo(range(n), params, cfg, rule_grid(), Protocol(full_forecasts=True))
     mc["metrics"].to_csv(RESULTS / "test_metrics.csv", index=False)
@@ -209,7 +220,7 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         "switch_z": f"{ss.z_enter:g}", "switch_exit": f"{ss.z_exit:g}",
         "es_red_always": med_all.loc["always|1", "es_red"], "es_red_always_onehalf": med_all.loc["always|1.5", "es_red"],
         "d_es_ratchet": signed(d_rt["mean"]), "d_es_ratchet_lo": signed(d_rt["lo"]), "d_es_ratchet_hi": signed(d_rt["hi"]),
-        "d_es_switch_abs": f"{abs(d_sw['mean']):.2f}", "d_es_switch_lo": signed(d_sw["lo"]), "d_es_switch_hi": signed(d_sw["hi"]),
+        "d_es_switch": signed(d_sw["mean"]), "d_es_switch_lo": signed(d_sw["lo"]), "d_es_switch_hi": signed(d_sw["hi"]),
         "d_es_placebo": signed(placebo["mean"]),
         "pgrid_floor_zero": signed(pgrid["floor_zero"]), "pgrid_floor_one": signed(pgrid["floor_one"]),
         "ql_har_iv_one": f"{f.loc[(1, 'HAR-IV'), 'qlike_ratio']:.2f}", "ql_har_iv_seven": f"{f.loc[(7, 'HAR-IV'), 'qlike_ratio']:.2f}",
@@ -218,6 +229,16 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         "rob_cost_min": signed(costs.min()), "rob_cost_max": signed(costs.max()),
         "pgrid_paths": f"{GRID_PATHS}", "pgrid_shifts": f"{len(GRID_SHIFTS)}",
     }
+    # how close was the selection, and what would one-bar execution have picked?
+    train = summarise_metrics(pd.read_csv(RESULTS / "train_grid_metrics.csv"))
+    ranked = train[train.index.str.startswith("ratchet|")]["es_red"].sort_values(ascending=False)
+    nums["train margin"] = f"{ranked.iloc[0] - ranked.iloc[1]:.2f}"
+    if (RESULTS / "train_grid_metrics_delay1.csv").exists() and (LIVE / "grid.csv").exists():
+        alt = select_rules(pd.read_csv(RESULTS / "train_grid_metrics_delay1.csv"))["ratchet"]
+        live_grid = pd.read_csv(LIVE / "grid.csv").set_index("rule")
+        nums["delay ratchet z"] = f"{rule_from_key(alt).z_enter:g}"
+        nums["delay ratchet timing"] = signed(live_grid.loc[alt, "timing"])
+        nums["delay ratchet same"] = "the same rule" if alt == rt else "a different rule"
     for r in robust.to_dict("records"):
         key = "rob." + r["scenario"].lower().replace("x0.5", "half").replace("x2", "double").replace(" 0", " zero").replace(" 12", " twelve").replace(" 24", " twentyfour")
         nums[key] = signed(r['d_mean'])
@@ -225,7 +246,8 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         nums[key.replace("rob.", "rob hi.")] = signed(r['d_hi'])
     live = live_paper(selection, fig_dir, tab_dir, calib)
     nums.update(live)
-    report.write_numbers(nums, PAPER / "numbers.tex")
+    used = "\n".join(f.read_text() for f in [PAPER / "main.tex", *(tab_dir.glob("*.tex"))] if f.exists())
+    report.write_numbers({k: v for k, v in nums.items() if report.macro_name(k) in used}, PAPER / "numbers.tex")
     if PAPER == ROOT / "paper" and live:
         write_readme_results(pd.read_csv(LIVE / "metrics.csv", index_col=0),
                              [("Unhedged", "Unhedged"), ("always|1", "Always-on minimum-variance hedge"),
@@ -272,9 +294,7 @@ def live_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path, calib_si
         ("iv_above_rv", "Share of days IV $>$ RV (\\%)", "", 0),
         ("corr_daily", "corr(daily return, $\\Delta$IV)", "corr_daily", 2),
         ("corr_down", "corr on falling 15m bars", "", 2),
-        ("corr_up", "corr on rising 15m bars", "", 2),
         ("ac1_15m_iv", "AC(1) of 15m index changes", "", 2),
-        ("kurt_daily", "Excess kurtosis, daily returns", "", 1),
         ("worst_day", "Worst daily log return ($-$\\%)", "", 1),
     ], tab_dir / "live_facts.tex")
     report.table_live_forecasts(evals, tab_dir / "live_forecasts.tex")
@@ -335,6 +355,8 @@ def live_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path, calib_si
         "live fund annual pct": f"{fund['annual_pct_notional']:.0f}", "live fund annual pts": f"{fund['annual_vol_points']:.0f}",
         "live fund pts a": f"{fy['2024']['annual_vol_points']:.0f}", "live fund pts b": f"{fy['2025']['annual_vol_points']:.0f}",
         "live fund pts c": signed(fy['2026']['annual_vol_points'], 0),
+        "live fund q one": f"{-facts['funding_2026']['q1_points']:.0f}",
+        "live fund rest": f"{facts['funding_2026']['rest_annual_points']:.0f}",
         "live fit max": f"{fit['max_err_bp']:.2f}", "live fit exact": f"{fit['share_exact']:.0f}",
         "live days traded": f"{perp['days_traded']}", "live perp days": f"{perp['days']}",
         "live bars traded": f"{100 * perp['bars_traded'] / perp['bars']:.1f}",
@@ -358,6 +380,10 @@ def live_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path, calib_si
         "live block lo min": min(v["lo"] for k, v in boot.items() if k.startswith("always|1 - Unhedged (es, block")),
         "live block lo max": max(v["lo"] for k, v in boot.items() if k.startswith("always|1 - Unhedged (es, block")),
         "live d ratchet": signed(bt(rt, "always|1")["diff"]), "live d ratchet ci": ci(bt(rt, "always|1")),
+        "live d ratchet abs": f"{abs(bt(rt, 'always|1')['diff']):.2f}",
+        "live held d": signed(boot[f"overlay|held - {rt} (es)"]["diff"]), "live held d ci": ci(boot[f"overlay|held - {rt} (es)"]),
+        "live pl matched d": f"{boot['placebo mean - always|matched (es)']['diff']:.1f}",
+        "live pl matched ci": ci(boot["placebo mean - always|matched (es)"]),
         "live d ratchet half": signed(bt(rt, "always|1.5")["diff"]), "live d ratchet half ci": ci(bt(rt, "always|1.5")),
         "live d switch": signed(bt(sw, "always|1")["diff"]), "live d switch ci": ci(bt(sw, "always|1")),
         "live d onehalf": signed(bt("always|1.5", "always|1")["diff"]), "live d onehalf ci": ci(bt("always|1.5", "always|1")),
@@ -388,6 +414,7 @@ def live_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path, calib_si
         "live size": signed(facts["placebo"]["mean"] - metrics.loc["always|1", "es_red"]),
         "live placebo mean": facts["placebo"]["mean"],
         "live grid sig one": f"{int((grid.loc[grid.floor == 1, 'rank_pct'] >= 95).sum())}",
+        "live grid exposure share": f"{100 * (1 - g.loc[1.0, 'timing'] / edge[grid.floor == 1].mean()):.0f}",
         "live grid n one": f"{int((grid.floor == 1).sum())}",
         "live placebo lo": facts["placebo"]["p05"], "live placebo hi": facts["placebo"]["p95"],
         "live grid shifts": f"{facts['grid']['shifts']}",
@@ -400,15 +427,15 @@ def live_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path, calib_si
         "live same es always": same["always|1"]["es_red"], "live same es ratchet": same[rt]["es_red"],
         "live mid es switch": mid[sw]["es_red"],
         # execution and capacity
-        "live delay hour": sens["execution 1 hour later"]["always|1"]["es_red"],
-        "live delay day": sens["execution 1 day later"]["always|1"]["es_red"],
+        "live delay hour": sens["execution 1 hour after the signal"]["always|1"]["es_red"],
+        "live delay day": sens["execution 1 day after the signal"]["always|1"]["es_red"],
         "live same net switch": signed(sens["same-bar execution"][sw]["hedge_pnl"] - sens["same-bar execution"][sw]["cost"], 1),
         "live book cost switch": f"{sens['book costs'][sw]['cost']:.1f}",
         "live book net switch": signed(sens["book costs"][sw]["hedge_pnl"] - sens["book costs"][sw]["cost"], 1),
         "live contracts": f"{cap['median_contracts_per_btc']:.0f}", "live median oi": f"{cap['median_oi_when_held']:.0f}",
         "live above oi": f"{cap['share_above_oi_when_held']:.0f}", "live above oi all": f"{cap['share_above_oi_all']:.0f}",
         "live max notional": f"{cap['max_notional_pct']:.0f}", "live max notional half": f"{cap['max_notional_pct_onehalf']:.0f}",
-        "live oi multiple lo": f"{min(oi_multiple):.0f}", "live oi multiple hi": f"{max(oi_multiple):.0f}",
+        "live oi multiple lo": f"{min(oi_multiple):.1f}", "live oi multiple hi": f"{max(oi_multiple):.0f}",
         "live best traded": f"{conc['best_day_traded_contracts']:.0f}",
         "live best market": f"{conc['best_day_market_contracts']:.0f}",
         "live dead always": f"{cap['always|1|trades_on_dead_days']:.0f}",
@@ -425,6 +452,10 @@ def live_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path, calib_si
         "live book btc": f"{book['btc_capacity_2_5pct']:.0f}",
         # forecasts
         "live ql one": ql(1, "HAR-IV"), "live dm one": dm(1, "HAR-IV"), "live ql iv one": ql(1, "IV"),
+        "live dm one listing": signed(facts["forecast_from_listing"]["1"]["dm"]),
+        "live ql year a": f"{facts['forecast_by_year']['2024']['ql_ratio']:.2f}",
+        "live ql year b": f"{facts['forecast_by_year']['2025']['ql_ratio']:.2f}",
+        "live ql year c": f"{facts['forecast_by_year']['2026']['ql_ratio']:.2f}",
         "live ql seven": ql(7, "HAR-IV"), "live dm seven": dm(7, "HAR-IV"), "live ql iv seven": ql(7, "IV"),
         "live ql thirty": ql(30, "IV"), "live dm thirty": dm(30, "IV"), "live ql har thirty": ql(30, "HAR-IV"),
         "live ql garch one": ql(1, "GARCH"), "live ql raw thirty": ql(30, "IV-raw"),
@@ -452,8 +483,9 @@ def write_readme_results(live: pd.DataFrame, rows: list[tuple[str, str]], nums: 
         "bar later at the mark. ES = expected shortfall (97.5%) of daily returns. Hedge P&L (index P&L minus funding), "
         "funding and trading costs in % of BTC notional a year; turnover = perpetual notional traded per year over BTC notional.",
         "", *table, "",
-        f"1. **Forecasting.** HAR with implied variance is the best one-day forecast (QLIKE {n['live_ql_one']} × HAR, "
-        f"Diebold–Mariano t = {n['live_dm_one']}). At 7 days HAR-IV ({n['live_ql_seven']} × HAR) and at 30 days the "
+        f"1. **Forecasting.** HAR with implied variance is the best one-day forecast (QLIKE {n['live_ql_one']} × HAR), ahead "
+        f"of HAR in every year but significantly only over the full window (Diebold–Mariano t = {n['live_dm_one']}; "
+        f"{n['live_dm_one_listing']} from the perpetual's listing). At 7 days HAR-IV ({n['live_ql_seven']} × HAR) and at 30 days the "
         f"bias-corrected index ({n['live_ql_thirty']} × HAR) lead, but not significantly. The simulation has the same winners.",
         f"2. **The hedge works, in crashes.** The minimum-variance hedge cut ES by {n['live_es_always']}% (95% block-bootstrap "
         f"CI {n['live_es_always_lo']}–{n['live_es_always_hi']}%) and the maximum drawdown from {n['live_mdd_unhedged']}% to "
@@ -461,7 +493,8 @@ def write_readme_results(live: pd.DataFrame, rows: list[tuple[str, str]], nums: 
         f"{n['live_es_year_c']}% (2026); without its best day, {n['live_es_ex_best']}%.",
         f"3. **Funding is the price.** Bitfinex funding settled at its ±0.25% cap in {n['live_fund_cap_share']}% of "
         f"{n['live_fund_n']} eight-hour periods; a permanently long contract paid {n['live_fund_annual_pts']} vol points a year "
-        f"({n['live_fund_pts_a']} in 2024, {n['live_fund_pts_b']} in 2025, {n['live_fund_pts_c']} in 2026).",
+        f"(annualised: {n['live_fund_pts_a']} in 2024 from April, {n['live_fund_pts_b']} in 2025, {n['live_fund_pts_c']} in 2026 "
+        f"to October, when longs received {n['live_fund_q_one']} points in the first quarter and paid again from April).",
         f"4. **Capacity and speed are the limits.** The perpetual traded a median ${n['live_median_usd']} a day; when held, the "
         f"hedge of one BTC was a median {n['live_contracts']} contracts against a median open interest of {n['live_median_oi']}. "
         f"On {n['live_book_date']}, a day after the sample, the book held the hedge of about {n['live_book_btc']} BTC within "
@@ -470,8 +503,9 @@ def write_readme_results(live: pd.DataFrame, rows: list[tuple[str, str]], nums: 
         f"5. **VWAP timing adds little beyond exposure.** The ratchet beat the always-on hedge by {n['live_d_ratchet']} pp of ES reduction "
         f"(CI {n['live_d_ratchet_ci']}); its {n['live_placebo_n']} placebos with the same triggers at shifted dates captured "
         f"{n['live_size']} pp of that (extra exposure), leaving {n['live_timing']} pp for timing; holding the overlay "
-        f"permanently reduced ES by {n['live_held_es']}%. In the simulation ({n['n_test']} test "
-        f"paths) the ratchet beats the always-on hedge by {n['d_es_ratchet']} pp but its placebo by only {n['d_es_placebo']} pp. "
+        f"permanently reduced ES by {n['live_held_es']}%, as much as the best timed rule. In the simulation ({n['n_test']} test "
+        f"paths) the ratchet beats the always-on hedge by {n['d_es_ratchet']} pp on average but its placebo by only "
+        f"{n['d_es_placebo']} pp. "
         f"Without a core hedge, VWAP timing adds {n['live_grid_zero']} pp on live data.",
         "<!-- RESULTS:END -->",
     ])
@@ -492,7 +526,8 @@ def compile_paper():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stage", choices=["all", "train", "test", "robust", "placebo", "placebo-grid", "paper"], default="all")
+    ap.add_argument("--stage", choices=["all", "train", "train-delay", "test", "robust", "placebo", "placebo-grid", "paper"],
+                    default="all")
     ap.add_argument("--quick", action="store_true", help="few paths, for a smoke test")
     ap.add_argument("--train-paths", type=int, default=48)
     ap.add_argument("--test-paths", type=int, default=200)
@@ -514,6 +549,8 @@ def main():
         selection = stage_train(args.train_paths, params, cfg)
     else:
         selection = json.loads(sel_path.read_text())
+    if args.stage in ("all", "train-delay"):
+        stage_train_delay(args.train_paths, params, cfg)
     if args.stage in ("all", "test"):
         stage_test(args.test_paths, params, cfg)
     if args.stage in ("all", "robust"):

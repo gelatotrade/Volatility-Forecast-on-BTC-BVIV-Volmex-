@@ -59,7 +59,7 @@ WIDTH = 6.3  # inches, the paper's text width
 
 def fig_live_market(daily: pd.DataFrame, perp_start: pd.Timestamp, path: str):
     """BTC, the official BVIV index and the Bitfinex BVIV-perp funding rate, 2023-2026."""
-    fig, axes = plt.subplots(3, 1, figsize=(WIDTH, 3.0), sharex=True,
+    fig, axes = plt.subplots(3, 1, figsize=(WIDTH, 2.8), sharex=True,
                              gridspec_kw={"hspace": 0.42, "height_ratios": [1, 1, 0.9]})
     ax = axes[0]
     ax.plot(daily.index, daily["btc"], color=BLUE, lw=1.0)
@@ -80,7 +80,7 @@ def fig_live_market(daily: pd.DataFrame, perp_start: pd.Timestamp, path: str):
     ax.fill_between(f.index, 0, f.clip(upper=0), color=AQUA, lw=0, alpha=0.85, label="longs receive")
     ax.set_ylim(-0.3, 0.3)
     ax.set_title("Bitfinex BVIV-perp funding (% per 8h, daily mean; cap ±0.25%)", color=INK)
-    ax.legend(loc="lower left", ncol=2, handlelength=1.0)
+    ax.legend(loc="center left", ncol=1, handlelength=1.0)          # 2023 has no funding: room for the legend
     ax.xaxis.set_major_locator(matplotlib.dates.YearLocator())
     ax.xaxis.set_minor_locator(matplotlib.dates.MonthLocator(bymonth=(4, 7, 10)))
     ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%Y"))
@@ -90,7 +90,7 @@ def fig_live_market(daily: pd.DataFrame, perp_start: pd.Timestamp, path: str):
 
 def fig_live_episode(ep: pd.DataFrame, z_enter: float, names: dict[str, str], path: str):
     """The best hedge day at 15-minute resolution: price vs VWAP band, BVIV, hedge sizes."""
-    fig, axes = plt.subplots(3, 1, figsize=(WIDTH, 3.2), sharex=True,
+    fig, axes = plt.subplots(3, 1, figsize=(WIDTH, 2.9), sharex=True,
                              gridspec_kw={"hspace": 0.75, "height_ratios": [1.15, 1, 1]})
     ax = axes[0]
     # ink tones for prices and signals, so blue/orange/aqua mean the three rules throughout
@@ -126,7 +126,7 @@ def fig_live_episode(ep: pd.DataFrame, z_enter: float, names: dict[str, str], pa
 def fig_live_hedge(daily: pd.DataFrame, key: str, path: str):
     """Cumulative P&L of the always-on hedge leg: index P&L, funding, and the two net of each other."""
     d = daily[[f"{key}|hedge_mtm", f"{key}|funding", f"{key}|cost"]].dropna()
-    fig, ax = plt.subplots(figsize=(WIDTH, 1.75))
+    fig, ax = plt.subplots(figsize=(WIDTH, 1.5))
     ax.axhline(0, color=AXIS, lw=0.8)
     ax.plot(d.index, 100 * d[f"{key}|hedge_mtm"].cumsum(), color=BLUE, lw=1.3, label="index P&L of the BVIV position")
     ax.plot(d.index, -100 * d[f"{key}|funding"].cumsum(), color=ORANGE, lw=1.3, label="funding (negative = paid)")
@@ -143,7 +143,7 @@ def fig_live_hedge(daily: pd.DataFrame, key: str, path: str):
 def fig_live_timing(placebo: pd.DataFrame, real: float, grid: pd.DataFrame, path: str):
     """Left: the selected ratchet against every weekly shift of its triggers.
     Right: timing value (ES reduction minus placebo mean) of every ratchet configuration, by core floor."""
-    fig, axes = plt.subplots(1, 2, figsize=(WIDTH, 1.8), gridspec_kw={"wspace": 0.3, "width_ratios": [1.1, 1]})
+    fig, axes = plt.subplots(1, 2, figsize=(WIDTH, 1.6), gridspec_kw={"wspace": 0.3, "width_ratios": [1.1, 1]})
     ax = axes[0]
     ax.hist(placebo["es_red"], bins=24, color=GRID, edgecolor="#fcfcfb", linewidth=0.6)
     ax.axvline(real, color=AQUA, lw=2.0)

@@ -73,7 +73,7 @@
       "tail_offset": 32.453093888583005
     }
   },
-  "execution 1 hour later": {
+  "execution 1 hour after the signal": {
     "always|1": {
       "vol": 42.040689549368224,
       "var_red": 14.538722825257967,
@@ -147,7 +147,7 @@
       "tail_offset": 27.98014828808143
     }
   },
-  "execution 1 day later": {
+  "execution 1 day after the signal": {
     "always|1": {
       "vol": 42.728326944697415,
       "var_red": 11.72016889858808,
