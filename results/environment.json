@@ -1,0 +1,11 @@
+{
+  "train": {
+    "arch": "8.0.0",
+    "matplotlib": "3.11.2",
+    "numpy": "2.4.6",
+    "pandas": "3.0.6",
+    "python": "3.11.15",
+    "scipy": "1.17.1",
+    "statsmodels": "0.15.0"
+  }
+}
