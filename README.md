@@ -104,3 +104,7 @@ Research code. Nothing here is investment advice. BVIV perpetuals are young, thi
 ## License
 
 MIT (see `LICENSE`).
+
+## Use of AI tools
+
+AI assistants (Claude, Anthropic) supported this project: in searching the literature, in writing and testing code, in cross-checking results and in drafting and editing the text. The research question, the design of the study and the interpretation of the results are the author's; the author directed the work, reviewed its results and takes full responsibility for the paper and this repository.
