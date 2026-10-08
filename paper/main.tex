@@ -205,6 +205,9 @@ The live sample is one path of \LiveEvalDays{} days, and the hedge's gains rest 
 Four lessons follow. (1)~HAR augmented with implied variance is the best one-day BTC volatility forecast, significantly so over the full window and in 2025 but not since the perpetual's listing; at a week HAR-IV and at a month the bias-corrected index lead HAR, not significantly. (2)~A minimum-variance \BVIV{} hedge cut tail risk by \LiveEsAlways\% over 2024--26, mostly through a few crashes with spiking implied volatility in 2026. Holding beats switching on costs and in the simulation; on live data the two cannot be told apart. (3)~Its price is funding, which on Bitfinex is capped, volatile and on average paid by longs (\LiveFundAnnualPts{} vol points a year), although they received it in early 2026; its limits are execution speed and capacity. (4)~A 15-minute VWAP breakdown is real but secondary information: without a core hedge it beats random timing, but with one, on average \LiveGridExposureShare\% of a ratchet's edge is extra exposure, which holding its overlay permanently delivers too; timing adds \LiveTiming{} points for the frozen rule and \LiveGridOne{} across the full-core grid. Intraday timing rules should face such placebos before they earn their complexity.
 
 \clearpage
+\section*{Use of generative tools}
+AI assistants (Claude, Anthropic) supported this work: in searching the literature, in writing and testing code, in cross-checking results and in drafting and editing the text. The research question, the design of the study and the interpretation of the results are the author's; the author directed the work, reviewed its results and takes full responsibility for the content of this paper.
+
 \section*{References}
 \renewcommand{\bibsection}{}
 \setlength{\columnsep}{14pt}
