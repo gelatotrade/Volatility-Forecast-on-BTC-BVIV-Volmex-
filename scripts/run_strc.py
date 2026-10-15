@@ -47,9 +47,9 @@ START, END = "2023-01-01", "2026-10-04"     # END exclusive; the last STRC sessi
 WARMUP_DAYS = 30                            # calendar days after the first STRC price before any hedge
 PLACEBO_STEP = 7
 CASH_FEE_BPS, CASH_SLIPPAGE_BPS = 1.0, 2.0  # commission and half the one-cent spread on a $100 share
-PERP_FEE_BPS = 4.5                          # Hyperliquid base taker fee
-BORROW = 0.0025                             # annual fee to borrow STRC for the cash short
-BOOK_LEVELS = 20
+PERP_FEE_BPS = 9.0                          # taker fee of HIP-3 markets: twice Hyperliquid's base 0.045%
+BORROW = 0.01                               # annual fee to borrow STRC (IBKR: 0.3-1.3% from July to October 2026)
+TRADING_DAYS = 252                          # rows per year of a book over US trading days
 
 
 # --------------------------------------------------------------------------- helpers
@@ -67,7 +67,7 @@ def run_books(bars: pd.DataFrame, cfg: HedgeConfig, rules: list[Rule], sig: pd.D
 
 
 def metrics_of(books: dict) -> pd.DataFrame:
-    return pd.DataFrame({k: book_metrics(b, books["Unhedged"]) for k, b in books.items()}).T
+    return pd.DataFrame({k: book_metrics(b, books["Unhedged"], per_year=TRADING_DAYS) for k, b in books.items()}).T
 
 
 def boot(books: dict, a: str, b: str, fn=es_red, block: float = 10.0) -> dict:
@@ -177,8 +177,7 @@ def book_depth(symbol: str, times: list[pd.Timestamp], notional_usd: float) -> d
     for t in times:
         t0 = t.strftime("%Y-%m-%dT%H:%M:%S")
         t1 = (t + pd.Timedelta("2min")).strftime("%Y-%m-%dT%H:%M:%S")
-        snap = json.loads(data.oxarchive_rows("orderbook/{symbol}/history", symbol, t0, t1,
-                                              {"depth": BOOK_LEVELS}, limit=1, max_pages=1))
+        snap = json.loads(data.oxarchive_rows("orderbook/{symbol}/l2/history", symbol, t0, t1, limit=1, max_pages=1))
         if not snap:
             continue
         s = snap[0]
@@ -193,7 +192,7 @@ def book_depth(symbol: str, times: list[pd.Timestamp], notional_usd: float) -> d
                      "bid_depth_usd_1pct": float((bids[bids[:, 0] >= mid * 0.99, 1] * bids[bids[:, 0] >= mid * 0.99, 0]).sum()),
                      "fill_share": float(min(1.0, bids[:, 1].sum() / qty)), "sell_cost_bps": float(1e4 * cost)})
     df = pd.DataFrame(rows)
-    return {"snapshots": int(len(df)), "levels": BOOK_LEVELS, "notional_usd": float(notional_usd),
+    return {"snapshots": int(len(df)), "notional_usd": float(notional_usd),
             "median_spread_bps": float(df["spread_bps"].median()), "median_depth_1pct_usd": float(df["bid_depth_usd_1pct"].median()),
             "median_sell_cost_bps": float(df["sell_cost_bps"].median()), "p90_sell_cost_bps": float(df["sell_cost_bps"].quantile(0.9)),
             "share_full_fill": float(100 * (df["fill_share"] >= 1).mean())}
@@ -239,6 +238,8 @@ def main():
              "environment": {"python": platform.python_version(),
                              **{m: importlib.metadata.version(m) for m in ("numpy", "pandas", "scipy", "arch", "statsmodels", "matplotlib")}}}
     facts["stylised"] = stylised(bars, divs, ev_day, None)
+    usd = (cashp["daily"]["close"] * cashp["daily"]["volume"]).loc[ipo.floor("1D"):]
+    facts["nasdaq_volume"] = {"median_daily_usd": float(usd.median()), "mean_daily_usd": float(usd.mean()), "days": int(len(usd))}
     facts["stylised_full"] = stylised(bars, divs, None, None)
 
     # ---- frozen rules, placebos, untimed benchmarks
@@ -249,7 +250,7 @@ def main():
     books = run_books(bars, cfg, rules, sig, ev_day)
     metrics = metrics_of(books)
     placebo_books = run_books(bars, cfg, placebos, sig, ev_day)
-    pl_notional = np.mean([book_metrics(placebo_books[p.name], placebo_books["Unhedged"])["notional"] for p in placebos])
+    pl_notional = np.mean([book_metrics(placebo_books[p.name], placebo_books["Unhedged"], per_year=TRADING_DAYS)["notional"] for p in placebos])
     scale = float(pl_notional / metrics.loc["always|1", "notional"])
     bench = [Rule("always|matched", "always", scale=scale),
              Rule("overlay|held", "ratchet", z_enter=np.inf, halflife_days=base_rt.halflife_days, floor=base_rt.floor,
@@ -266,7 +267,7 @@ def main():
     facts["placebo"] = {"n": len(placebos), "real": float(real), "mean": float(fake.mean()),
                         "share_beaten": float(100 * (real > fake).mean()), "p05": float(np.quantile(fake, 0.05)),
                         "p95": float(np.quantile(fake, 0.95)), "step_days": PLACEBO_STEP}
-    facts["benchmarks"] = {"matched_scale": scale, **{r.name: book_metrics(bench_books[r.name], bench_books["Unhedged"]) for r in bench}}
+    facts["benchmarks"] = {"matched_scale": scale, **{r.name: book_metrics(bench_books[r.name], bench_books["Unhedged"], per_year=TRADING_DAYS) for r in bench}}
 
     bs = {}
     for a, b in ((rt, "always|1"), (sw, "always|1"), ("always|1", "Unhedged"), ("always|1.5", "always|1")):
@@ -308,7 +309,7 @@ def main():
                         ("ten times the trading costs", bars, cfg.with_(fee_bps=10 * CASH_FEE_BPS, slippage_bps=10 * CASH_SLIPPAGE_BPS))):
         res, _ = run_rules(b, c, [Rule("Unhedged", "unhedged"), *rules], signals=build_signals(b, c, fc30) if c.max_notional_frac != cap else sig)
         bk = session_books(res, day, ev_day)
-        sens[label] = {k: book_metrics(v, bk["Unhedged"]) for k, v in bk.items() if k != "Unhedged"}
+        sens[label] = {k: book_metrics(v, bk["Unhedged"], per_year=TRADING_DAYS) for k, v in bk.items() if k != "Unhedged"}
     # UTC calendar days instead of trading days: the weekend mismatch of an exchange-hours hedge
     res, _ = run_rules(bars, cfg, [Rule("Unhedged", "unhedged"), *rules], signals=sig)
     utc = {k: daily_book(v).loc[ev_bar.floor("1D"):] for k, v in res.items()}
@@ -322,16 +323,17 @@ def main():
     lst_bar = pbars.index[pbars.index >= listing][0]
     lst_day = day.loc[pbars.index[(pbars.index >= listing) & pbars["tradable"].to_numpy()][0]]
     first_full = books["Unhedged"].index[books["Unhedged"].index > lst_day][0]       # the first whole session after listing
-    psig = build_signals(pbars, cfg, fc30)
+    psig = sig                                                    # the same hedge ratio: only the venue changes
     pcfg = cfg.with_(fee_bps=PERP_FEE_BPS, slippage_bps=0.0, warmup_bars=int(pbars.index.get_loc(lst_bar)))
     pres, _ = run_rules(pbars, pcfg, [Rule("Unhedged", "unhedged"), *rules], signals=psig)
     pbooks = session_books(pres, pbars["session"], first_full)
     cbooks = {k: v.loc[first_full:] for k, v in allb.items()}
     window = {"start": str(first_full.date()), "end": str(cbooks["Unhedged"].index[-1].date()), "days": int(len(cbooks["Unhedged"])),
-              "cash": {k: book_metrics(cbooks[k], cbooks["Unhedged"]) for k in ("always|1", rt, sw)},
-              "perp": {k: book_metrics(pbooks[k], pbooks["Unhedged"]) for k in ("always|1", rt, sw)}}
+              "cash": {k: book_metrics(cbooks[k], cbooks["Unhedged"], per_year=TRADING_DAYS) for k in ("always|1", rt, sw)},
+              "perp": {k: book_metrics(pbooks[k], pbooks["Unhedged"], per_year=TRADING_DAYS) for k in ("always|1", rt, sw)}}
     both = {"Unhedged": cbooks["Unhedged"], "perp": pbooks["always|1"], "cash": cbooks["always|1"]}
     window["perp - cash (es)"] = live.paired_block_bootstrap(both, "Unhedged", es_red, "perp", "cash")
+    window["perp - cash (var)"] = live.paired_block_bootstrap(both, "Unhedged", var_red, "perp", "cash")
     facts["perp_window"] = window
     facts["perp_market"] = perp_market(perpp, lst_bar, END)
     pos = pres["always|1"]["position"].loc[lst_bar:]
@@ -356,7 +358,7 @@ def main():
            "half each": combine(bbooks["always|1"], books["always|1"]),
            "STRC ratchet": books[rt], "BVIV ratchet": bbooks[rt], "half each, ratchets": combine(bbooks[rt], books[rt])}
     assert np.allclose(cmp["BVIV"]["btc"], cmp["STRC"]["btc"])
-    facts["vs_bviv"] = {k: book_metrics(v, cmp["Unhedged"]) for k, v in cmp.items() if k != "Unhedged"}
+    facts["vs_bviv"] = {k: book_metrics(v, cmp["Unhedged"], per_year=TRADING_DAYS) for k, v in cmp.items() if k != "Unhedged"}
     facts["vs_bviv"]["hedge_corr"] = float((cmp["STRC"]["hedge"] - cmp["STRC"]["cost"]).corr(cmp["BVIV"]["hedge"] - cmp["BVIV"]["cost"]))
     for a, b in (("half each", "BVIV"), ("half each", "STRC"), ("STRC", "BVIV")):
         bs[f"{a} - {b} (es)"] = live.paired_block_bootstrap(cmp, "Unhedged", es_red, a, b)

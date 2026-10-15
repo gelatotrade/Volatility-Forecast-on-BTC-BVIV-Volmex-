@@ -1,15 +1,16 @@
 # Hedging Bitcoin with Its Own Fear Gauge
 
-**Evidence from the BVIV perpetual on volatility forecasts, funding costs and 15-minute VWAP timing**
+**Evidence from the BVIV and STRC perpetuals on volatility forecasts, funding costs and 15-minute VWAP timing**
 
-📄 **Paper:** [`paper/main.pdf`](paper/main.pdf) (8 pages including references)
+📄 **Paper:** [`paper/main.pdf`](paper/main.pdf) (10 pages including references)
 
-A perpetual future on the Volmex **BVIV** index (30-day BTC implied volatility) has traded on Bitfinex since April 2024. This repository uses its full record to ask two questions:
+A perpetual future on the Volmex **BVIV** index (30-day BTC implied volatility) has traded on Bitfinex since April 2024. This repository uses its full record to ask three questions:
 
 1. How should BTC volatility be forecast when a 30-day implied-volatility index can be observed?
 2. Can a long position in the **BVIV perpetual**, possibly timed by a **VWAP signal on 15-minute bars**, hedge **spot or perpetual BTC**, and what does that hedge cost?
+3. Does a **short position in STRC**, the variable-rate preferred stock with which Strategy Inc. funds its bitcoin (Nasdaq since July 2025, a Hyperliquid perpetual `xyz:STRC` since June 2026), work as a crash hedge under the same rules?
 
-The data are Binance BTCUSDT 15-minute bars and the official Volmex BVIV index from 2023-01 to 2026-10, and the Bitfinex perpetual's marks, quotes, trades, open interest and every funding settlement since its listing in April 2024. The hedging rules are frozen on simulated training data, so the live sample is out of sample for the rules. A calibrated simulation with an arbitrage-free perpetual serves as a controlled experiment. One pipeline generates every table, figure and result in the paper.
+The data are Binance BTCUSDT 15-minute bars and the official Volmex BVIV index from 2023-01 to 2026-10, and the Bitfinex perpetual's marks, quotes, trades, open interest and every funding settlement since its listing in April 2024. The hedging rules are frozen on simulated training data, so the live sample is out of sample for the rules. For STRC, the data are its hourly Nasdaq prices and every dividend since the listing, and the perpetual's 15-minute marks, oracle prices, open interest, order books and hourly funding. A calibrated simulation with an arbitrage-free perpetual serves as a controlled experiment. One pipeline generates every table, figure and result in the paper.
 
 ## Key results
 
@@ -29,6 +30,7 @@ Live data, 3 April 2024 to 3 October 2026 (914 days): a 1-BTC spot book hedged w
 3. **Funding is the price.** Bitfinex funding settled at its ±0.25% cap in 41% of 2,740 eight-hour periods; a permanently long contract paid 24 vol points a year (annualised: 46 in 2024 from April, 34 in 2025, −12 in 2026 to October, when longs received 22 points in the first quarter and paid again from April).
 4. **Capacity and speed are the limits.** The perpetual traded a median $71 a day; when held, the hedge of one BTC was a median 248 contracts against a median open interest of 103. On 4 October 2026, a day after the sample, the book held the hedge of about 4 BTC within 2.5% of the mid; trading one BTC's hedge cost about 0.50% per side in price impact. Executing one hour late cut the ES reduction to 16.0%, one day late to 12.6%.
 5. **VWAP timing adds little beyond exposure.** The ratchet beat the always-on hedge by +2.37 pp of ES reduction (CI [−0.22, +4.89]); its 129 placebos with the same triggers at shifted dates captured +2.03 pp of that (extra exposure), leaving +0.34 pp for timing; holding the overlay permanently reduced ES by 20.5%, as much as the best timed rule. In the simulation (200 test paths) the ratchet beats the always-on hedge by +0.53 pp on average but its placebo by only +0.05 pp. Without a core hedge, VWAP timing adds +6.68 pp on live data.
+6. **Short STRC hedges the issuer, not the crash.** Shorting Strategy's STRC preferred on Nasdaq (29 August 2025 to 2 October 2026, 275 US trading days, same frozen rules) reduced ES by 16.2% (CI [+1.4, +25.8]) and variance by 22.4%, at 16.4% of BTC notional a year, almost all dividends. In the BTC crash of 5 February 2026 STRC fell 4.7% and regained 5.8% the next day, so the hedge lost 7.6% that week; in Strategy's funding squeeze of June 2026 it earned 19.4% while BTC lost 5.9%. VWAP timing added nothing (−0.7 pp). On the same days the BVIV hedge reduced ES by 47.7%, half of each by 38.6% (variance: 35.3%, the most). The `xyz:STRC` perpetual cost shorts 5.3% a year in funding instead of 12% in dividends, tracked the Nasdaq opening gap overnight (correlation 0.92), and one BTC's hedge was 0.34% of its open interest.
 <!-- RESULTS:END -->
 
 ## How it works
@@ -56,6 +58,7 @@ Live data, 3 April 2024 to 3 October 2026 (914 days): a 1-BTC spot book hedged w
 * **VWAP ratchet** (`src/bvivhedge/hedge.py`). The ratchet keeps a minimum-variance core hedge. When price breaks below the VWAP band, it raises protection to the downside hedge ratio straight away, then lets it decay slowly.
 * **Frozen rules, single-path inference, exposure-versus-timing placebos.** Rules are selected on 48 simulated training paths and never re-fitted on live data. Live intervals come from a paired stationary block bootstrap over days. Every ratchet is compared with copies whose trigger series is circularly shifted by whole weeks within the evaluation window, whose last incomplete week stays unshifted (same number, clustering and hour-of-week profile of triggers, scrambled timing). Its edge over the always-on hedge then splits into exposure (placebo minus always-on) and timing (ratchet minus placebo). Two untimed benchmarks show what the exposure is: the minimum-variance hedge scaled to the placebos' notional, and the ratchet's overlay held permanently.
 * **Controlled experiment** (`src/bvivhedge/simulate.py`). The simulated index is the model's closed-form 30-day variance expectation (Feynman–Kac over regime paths, lognormal in the factor shocks), and the perpetual's funding is the one-bar drift transfer (exact over regimes and jumps, second order in the diffusive shocks) plus a carry, so there is no free lunch from mean reversion. Both are checked against brute-force Monte Carlo in the tests. The simulation fills on the signal bar, because its index has no lag.
+* **STRC: same rules, short instead of long** (`src/bvivhedge/strc.py`, `scripts/run_strc.py`). The engine takes a hedge direction, so the frozen rules short STRC whenever the EWMA slope of BTC returns on STRC price changes is positive. Nasdaq prices exist only at hourly closes in regular hours: the slope uses synchronous moves only, a decision is filled at the next hourly close, a Nasdaq short pays every dividend and a borrow fee, and books are compared over US trading days so that a weekend BTC move meets STRC's Monday gap. On the perpetual the same hedge ratio trades every 15 minutes around the clock and pays funding instead of dividends. The notional cap carries the BVIV study's risk budget over (half the BTC notional, scaled by the BVIV/STRC volatility ratio over STRC's first 30 days).
 * **No look-ahead.** Every signal and forecast is causal. Tests confirm that truncating the sample leaves past values of the VWAP signal, the hedge ratios and the regression forecasts unchanged.
 
 ## Repository layout
@@ -64,22 +67,26 @@ Live data, 3 April 2024 to 3 October 2026 (914 days): a 1-BTC spot book hedged w
 paper/                 LaTeX source, generated tables/figures/numbers, compiled PDF
 scripts/fetch_data.py  downloads and caches the live inputs (data/raw/, not tracked)
 scripts/run_live.py    live study: forecasts, frozen rules, bootstrap, placebos, sensitivities -> results/live/
+scripts/run_strc.py    STRC study: Nasdaq and perpetual short hedges, placebos, BVIV comparison -> results/strc/
 scripts/run_paper.py   simulation study (train -> test -> robust -> placebo -> placebo-grid) and the paper build
 src/bvivhedge/
-  data.py              loaders: Binance, Volmex, Bitfinex status/candles/funding, Deribit, Hyperliquid
+  data.py              loaders: Binance, Volmex, Bitfinex status/candles/funding, Deribit, Hyperliquid,
+                       Yahoo (STRC), Nasdaq dividends, 0xArchive (HIP-3 marks, open interest, order books)
   live.py              live panel (15m bars), funding per bar, block bootstrap
+  strc.py              STRC panel: exchange-hours prices, dividends, perpetual funding, US trading-day labels
   simulate.py          calibrated market: regimes, EGARCH-type vol, jumps, seasonality, BVIV, perp
   realized.py          realised variance, bipower variation, semivariances, intraday profile
   forecast.py          RW, EWMA, GARCH(1,1)-t, HAR, IV-raw, IV, HAR-IV; QLIKE, Mincer-Zarnowitz, Diebold-Mariano
   vwap.py              rolling/session VWAP, volatility-scaled z-score, hysteresis gate
-  hedge.py             hedge ratios, rule families, timing placebos, rebalancing band, execution delay, P&L engine
+  hedge.py             hedge ratios, rule families, timing placebos, rebalancing band, execution delay,
+                       long or short hedges, exchange hours, P&L engine
   metrics.py           ES, variance reduction, drawdown, tail offset, carry, turnover
   experiments.py       Monte Carlo, rule grid, selection, paired bootstrap
   constants.py         bar length and calendar constants
   plots.py, report.py  figures, LaTeX tables, number macros
-tests/                 41 tests: accounting identities, causality, index expectation, perp fairness,
-                       placebo trigger counts, funding reconstruction and timing, parsers
-results/               live results (results/live/), cached Monte Carlo results, the rule selection,
+tests/                 51 tests: accounting identities, causality, index expectation, perp fairness,
+                       placebo trigger counts, funding reconstruction and timing, parsers, short and exchange-hours hedges
+results/               live results (results/live/, results/strc/), cached Monte Carlo results, the rule selection,
                        the package versions behind each run (environment.json, live/facts.json)
 ```
 
@@ -90,12 +97,13 @@ pip install -r requirements.txt           # or requirements-lock.txt: the exact 
 python -m pytest                          # ~15 s
 python scripts/fetch_data.py              # first run downloads ~2.6 million Bitfinex snapshots (BVIV and BTC perp)
 python scripts/run_live.py                # live study, ~10 min on 4 cores -> results/live/
+python scripts/run_strc.py                # STRC study, ~2 min -> results/strc/ (needs OXARCHIVE_API_KEY on a first run)
 python scripts/run_paper.py --stage paper # tables, figures, numbers and paper/main.pdf from cached results (seconds)
 python scripts/run_paper.py               # full simulation study, 1-2 h on 4 cores, then the paper
 python scripts/run_paper.py --quick       # smoke run of the simulation (8 paths), written to results/quick/
 ```
 
-Building the PDF needs `latexmk` with a standard TeX distribution (TeX Live or TinyTeX). The live data come from public endpoints that need no key: `data.binance.vision` (BTC klines), `rest-v1.volmex.finance` (BVIV index), `api-pub.bitfinex.com` (perpetual status, trade candles, BTC-perp funding) and `www.deribit.com` (fallback BTC funding, used only if Bitfinex fails and then recorded in `results/live/facts.json`). Every window that has ended is cached in `data/raw/`, so a rerun with the same dates is offline. The one input without public history is the order-book snapshot of 4 October 2026, kept in `results/live/book_snapshot.json`. `data.py` also has loaders for the Hyperliquid `mkts:BVIV` market (listed September 2026, too short for this study), Deribit DVOL and CSV exports of BVIV.
+Building the PDF needs `latexmk` with a standard TeX distribution (TeX Live or TinyTeX). The live data come from public endpoints that need no key: `data.binance.vision` (BTC klines), `rest-v1.volmex.finance` (BVIV index), `api-pub.bitfinex.com` (perpetual status, trade candles, BTC-perp funding) and `www.deribit.com` (fallback BTC funding, used only if Bitfinex fails and then recorded in `results/live/facts.json`). Every window that has ended is cached in `data/raw/`, so a rerun with the same dates is offline. The one input without public history is the order-book snapshot of 4 October 2026, kept in `results/live/book_snapshot.json`. The STRC study reads STRC prices from Yahoo's chart API, dividends from `api.nasdaq.com` and the perpetual's hourly funding from `api.hyperliquid.xyz`, all public; the perpetual's 15-minute marks, oracle prices, open interest and order-book snapshots come from 0xArchive, which needs an API key in `OXARCHIVE_API_KEY` (never stored in the repository; the raw replies are cached in `data/raw/`, which is not tracked). `data.py` also has loaders for the Hyperliquid `mkts:BVIV` market (listed September 2026, too short for this study), Deribit DVOL and CSV exports of BVIV.
 
 ## Disclaimer
 
