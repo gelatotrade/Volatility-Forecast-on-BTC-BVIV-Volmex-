@@ -1,10 +1,14 @@
 """Hedge ratios, hedging rules and a bar-by-bar P&L engine.
 
 The book is long ``qty`` BTC (spot, or a perpetual that additionally pays
-funding).  The hedge is a long position of ``H`` BVIV-perpetual contracts, each
-paying one dollar per index point.  A position executed at the close of bar *t*
-(decided ``exec_delay`` bars earlier) is held over bar *t+1*; trades pay fees and
-slippage on traded notional.
+funding).  The hedge is a position of ``H`` contracts in a hedge instrument whose
+price sits in the ``bviv_*`` columns: long BVIV-perpetual contracts, each paying one
+dollar per index point (``direction=+1``), or short STRC shares or perpetual
+contracts (``direction=-1``, the STRC study).  A position executed at the close of
+bar *t* (decided ``exec_delay`` bars earlier) is held over bar *t+1*; trades pay fees
+and slippage on traded notional.  An instrument that trades only in exchange hours
+carries a ``tradable`` column (positions change only on those bars) and a
+``hedge_update`` column (bars on which its price is observed).
 
 Four rule families are compared:
 
@@ -51,6 +55,7 @@ class HedgeConfig:
     placebo_start_days: int | None = None  # placebo shifts are circular from this day on (default: warm-up end),
                                            # so the evaluation window keeps the real number of triggers
     warmup_bars: int | None = None      # no hedging before this bar (default: warm-up days), e.g. a listing time
+    direction: int = 1                  # +1: long the hedge instrument (BVIV); -1: short it (STRC)
 
     def with_(self, **changes) -> "HedgeConfig":
         return replace(self, **changes)
@@ -129,10 +134,31 @@ def ratchet(trigger: np.ndarray, halflife_bars: float) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- signals
+def synchronous_moves(bars: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """BTC log returns and hedge-price changes over the same intervals, and the bars that end one.
+
+    Without a ``hedge_update`` column every bar ends an interval.  With one, the instrument's price is only
+    observed on update bars (e.g. hourly closes in exchange hours), so the BTC return is accumulated since the
+    previous update: pairing a stale price with 15-minute BTC returns would bias the slope towards zero.
+    """
+    logp = np.log(bars["close"].to_numpy())
+    mark = bars["bviv_mark"].to_numpy()
+    if "hedge_update" not in bars:
+        r = np.r_[0.0, np.diff(logp)]
+        return r, np.r_[0.0, np.diff(mark)], np.ones(len(bars), dtype=bool)
+    upd = bars["hedge_update"].to_numpy(dtype=bool)
+    idx = np.flatnonzero(upd)
+    r, d = np.zeros(len(bars)), np.zeros(len(bars))
+    r[idx[1:]] = np.diff(logp[idx])
+    d[idx[1:]] = np.diff(mark[idx])
+    ends = np.zeros(len(bars), dtype=bool)
+    ends[idx[1:]] = True
+    return r, d, ends
+
+
 def build_signals(bars: pd.DataFrame, cfg: HedgeConfig, daily_rv_forecast: pd.Series | None = None) -> pd.DataFrame:
     """Everything the rules need, computed causally at each bar close."""
-    r = np.log(bars["close"]).diff().fillna(0.0).to_numpy()
-    d_mark = bars["bviv_mark"].diff().fillna(0.0).to_numpy()
+    r, d_mark, ends = synchronous_moves(bars)
     hl = cfg.beta_halflife_days * BARS_PER_DAY
 
     vol = intraday_vol_forecast(bars)
@@ -142,9 +168,13 @@ def build_signals(bars: pd.DataFrame, cfg: HedgeConfig, daily_rv_forecast: pd.Se
         vwap, window = rolling_vwap(bars), 1.0
     z = vwap_zscore(bars, vwap, vol["sigma_day"], window)
 
-    beta_all, _ = ewma_beta(r, d_mark, hl)
-    beta_dn, n_dn = ewma_beta(r, d_mark, hl, mask=r < 0)   # downside second-moment hedge ratio: the crash response
-    w = n_dn / (n_dn + cfg.downside_prior_days * BARS_PER_DAY)
+    sync = "hedge_update" in bars
+    beta_all, _ = ewma_beta(r, d_mark, hl, mask=ends if sync else None)
+    beta_dn, n_dn = ewma_beta(r, d_mark, hl, mask=ends & (r < 0))   # downside second-moment hedge ratio: the crash response
+    # the prior counts observations: on an exchange-hours instrument only the share of bars that end an interval
+    # (a property of the exchange calendar, from the first observed price on)
+    observed = ends[np.argmax(ends):].mean() if sync and ends.any() else 1.0
+    w = n_dn / (n_dn + cfg.downside_prior_days * BARS_PER_DAY * observed)
     beta_dn = w * beta_dn + (1 - w) * beta_all
 
     usd_per_logret = cfg.qty * bars["close"].to_numpy()
@@ -152,8 +182,9 @@ def build_signals(bars: pd.DataFrame, cfg: HedgeConfig, daily_rv_forecast: pd.Se
         {
             "vwap": vwap, "z": z, "sigma_day": vol["sigma_day"],
             "beta_all": beta_all, "beta_down": beta_dn,
-            "mv_all": np.maximum(-beta_all, 0.0) * usd_per_logret,     # contracts, long-vol only
-            "mv_down": np.maximum(-beta_dn, 0.0) * usd_per_logret,
+            # contracts on the protective side only: long BVIV when it rises as BTC falls, short STRC when it falls
+            "mv_all": np.maximum(-cfg.direction * beta_all, 0.0) * usd_per_logret,
+            "mv_down": np.maximum(-cfg.direction * beta_dn, 0.0) * usd_per_logret,
             "cap": cfg.max_notional_frac * usd_per_logret / bars["bviv_mark"].to_numpy(),
         },
         index=bars.index,
@@ -211,6 +242,13 @@ def target_hedge(bars: pd.DataFrame, sig: pd.DataFrame, rule: Rule, cfg: HedgeCo
     return h, switch
 
 
+def hold_between(position: np.ndarray, tradable: np.ndarray) -> np.ndarray:
+    """The position as filled: it changes only on tradable bars, to the latest target (flat before the first)."""
+    idx = np.where(tradable, np.arange(len(position)), -1)
+    last = np.maximum.accumulate(idx)
+    return np.where(last >= 0, position[np.maximum(last, 0)], 0.0)
+
+
 def apply_rebalance_band(target: np.ndarray, switch: np.ndarray, band: float) -> np.ndarray:
     """Hold the position until the target drifts by more than ``band`` or a switch flips."""
     pos = np.empty_like(target)
@@ -227,8 +265,9 @@ def apply_rebalance_band(target: np.ndarray, switch: np.ndarray, band: float) ->
 def backtest(bars: pd.DataFrame, position: np.ndarray, cfg: HedgeConfig) -> pd.DataFrame:
     """Bar P&L in USD of the BTC leg, the hedge leg and trading costs.
 
-    ``position[t]`` contracts are held from the close of bar t (already shifted by
-    ``exec_delay``); they earn the mark change and pay the funding of bar t+1.
+    ``position[t]`` contracts (negative when short) are held from the close of bar t (already shifted by
+    ``exec_delay``); they earn the mark change and pay the funding of bar t+1 (a long pays positive funding;
+    a dividend is negative funding for a long, so a short pays it).
     """
     s = bars["close"].to_numpy()
     mark = bars["bviv_mark"].to_numpy()
@@ -249,7 +288,7 @@ def backtest(bars: pd.DataFrame, position: np.ndarray, cfg: HedgeConfig) -> pd.D
         basis = np.nan_to_num(change * (bars["bviv_fill"].to_numpy() - mark))
     return pd.DataFrame(
         {"btc": btc, "hedge": hedge, "funding": funding, "carry": carry, "cost": cost + basis, "basis": basis,
-         "position": position, "notional": position * mark, "traded_notional": traded * mark,
+         "position": position, "notional": np.abs(position) * mark, "traded_notional": traded * mark,
          "btc_notional": cfg.qty * s},
         index=bars.index,
     )
@@ -268,5 +307,7 @@ def run_rules(bars: pd.DataFrame, cfg: HedgeConfig, rules=DEFAULT_RULES,
         position = apply_rebalance_band(target, switch, cfg.rebalance_band)
         if cfg.exec_delay:
             position = np.r_[np.zeros(cfg.exec_delay), position[:-cfg.exec_delay]]
-        results[rule.name] = backtest(bars, position, cfg)
+        if "tradable" in bars:
+            position = hold_between(position, bars["tradable"].to_numpy(dtype=bool))
+        results[rule.name] = backtest(bars, cfg.direction * position, cfg)
     return results, sig

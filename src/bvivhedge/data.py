@@ -16,6 +16,15 @@ Sources (all public; the study needs no key):
 * Deribit -- the DVOL index, a close substitute for BVIV before the perpetual existed.
 * Any CSV export of BVIV (e.g. from a charting platform) via :func:`load_index_csv`.
 
+For the STRC study (Strategy's Stretch preferred stock, Nasdaq ``STRC``, and its Hyperliquid perpetual
+``xyz:STRC``, listed June 2026):
+
+* Yahoo chart API -- STRC hourly and daily bars (hourly history reaches back 730 days);
+* Nasdaq ``api.nasdaq.com`` -- STRC dividends (ex-dates and amounts);
+* Hyperliquid ``api.hyperliquid.xyz/info`` -- the perpetual's hourly candles and hourly funding;
+* 0xArchive ``api.0xarchive.io`` (``OXARCHIVE_API_KEY``) -- the perpetual's 15m candles and its hourly
+  mark, oracle price, open interest and order-book snapshots, which the public API does not keep.
+
 Parsers are separated from fetchers so they can be tested offline.  Every
 fetch of a window that has already ended is cached under ``data/raw`` (a partial month
 under a name that carries its end), so a rerun with the same dates is free and offline.
@@ -396,6 +405,132 @@ def fetch_hyperliquid_bviv(start: str, end: str, coin: str = HYPERLIQUID_COIN) -
     else:
         out["funding_8h"] = np.nan
     return out
+
+
+# --------------------------------------------------------------------------- STRC: Nasdaq stock and Hyperliquid perpetual
+YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
+NASDAQ_API = "https://api.nasdaq.com/api/quote/"
+OXARCHIVE_HIP3 = "https://api.0xarchive.io/v1/hyperliquid/hip3/"
+
+
+def _window_ended(end: str) -> bool:
+    return pd.Timestamp(end, tz="UTC") <= pd.Timestamp.now(tz="UTC")
+
+
+def parse_yahoo_chart(payload: bytes) -> pd.DataFrame:
+    """Yahoo v8 chart reply -> OHLCV indexed by bar open time (UTC); bars without a close are dropped."""
+    res = json.loads(payload)["chart"]["result"][0]
+    q = res["indicators"]["quote"][0]
+    out = pd.DataFrame({k: np.array(q[k], dtype=float) for k in ("open", "high", "low", "close", "volume")},
+                       index=pd.to_datetime(np.asarray(res["timestamp"], dtype="int64"), unit="s", utc=True))
+    return out.dropna(subset=["close"]).sort_index()
+
+
+def fetch_yahoo_chart(symbol: str, interval: str, start: str, end: str) -> pd.DataFrame:
+    """Regular-session bars from ``start`` to ``end`` (dates, end exclusive); hourly history reaches back 730 days."""
+    t0, t1 = (int(pd.Timestamp(x, tz="UTC").timestamp()) for x in (start, end))
+    url = f"{YAHOO_CHART}{symbol}?interval={interval}&period1={t0}&period2={t1}&includePrePost=false"
+    name = f"yahoo_{symbol}_{interval}_{start}_{end}.json"
+    blob = _cached(name, lambda: _get(url)) if _window_ended(end) else _get(url)
+    bars = parse_yahoo_chart(blob)                  # the hourly endpoint may ignore period2
+    return bars.loc[pd.Timestamp(start, tz="UTC"): pd.Timestamp(end, tz="UTC") - pd.Timedelta("1s")]
+
+
+def parse_nasdaq_dividends(payload: bytes) -> pd.DataFrame:
+    """Nasdaq dividend history -> one row per ex-date: amount per share and the declared dates."""
+    rows = json.loads(payload)["data"]["dividends"]["rows"]
+
+    def date(s: str):
+        return pd.NaT if s in ("N/A", "", None) else pd.Timestamp(s)
+
+    out = pd.DataFrame({
+        "amount": [float(r["amount"].replace("$", "").replace(",", "")) for r in rows],
+        "record_date": [date(r["recordDate"]) for r in rows],
+        "pay_date": [date(r["paymentDate"]) for r in rows],
+        "declared": [date(r["declarationDate"]) for r in rows],
+    }, index=pd.DatetimeIndex([date(r["exOrEffDate"]) for r in rows], name="ex_date"))
+    return out.sort_index()
+
+
+def fetch_nasdaq_dividends(symbol: str, until: str) -> pd.DataFrame:
+    """Dividends with ex-dates before ``until``; the reply is cached on first use (later declarations are dropped)."""
+    url = f"{NASDAQ_API}{symbol}/dividends?assetclass=stocks"
+    divs = parse_nasdaq_dividends(_cached(f"nasdaq_dividends_{symbol}_{until}.json", lambda: _get(url)))
+    return divs.loc[: pd.Timestamp(until) - pd.Timedelta("1ns")]
+
+
+def fetch_hyperliquid(kind: str, coin: str, start: str, end: str, interval: str = "1h") -> bytes:
+    """All ``candleSnapshot`` or ``fundingHistory`` rows of a coin in [start, end), paged, as one JSON list."""
+    t0, t1 = (int(pd.Timestamp(x, tz="UTC").timestamp() * 1000) for x in (start, end))
+
+    def stamp(r: dict) -> int:
+        return int(r["t"] if kind == "candles" else r["time"])
+
+    def pull() -> bytes:
+        rows, cursor = {}, t0
+        while cursor < t1:
+            body = ({"type": "candleSnapshot", "req": {"coin": coin, "interval": interval, "startTime": cursor, "endTime": t1}}
+                    if kind == "candles" else {"type": "fundingHistory", "coin": coin, "startTime": cursor, "endTime": t1})
+            page = [r for r in json.loads(_post_json(HYPERLIQUID_INFO, body)) if t0 <= stamp(r) < t1]
+            last = max((stamp(r) for r in page), default=cursor - 1)
+            if last < cursor:                 # nothing new: the reply repeats the candle that contains the cursor
+                break
+            rows.update({stamp(r): r for r in page})
+            cursor = last + 1
+        return json.dumps([rows[k] for k in sorted(rows)]).encode()
+
+    name = f"hyperliquid_{kind}_{coin.replace(':', '-')}_{interval if kind == 'candles' else 'h'}_{start}_{end}.json"
+    return _cached(name, pull) if _window_ended(end) else pull()
+
+
+def oxarchive_rows(route: str, symbol: str, start: str, end: str, params: dict | None = None,
+                   api_key: str | None = None, limit: int = 1000, max_pages: int | None = None) -> bytes:
+    """Every row of a 0xArchive HIP-3 route in [start, end), following its cursor, as one JSON list (cached).
+
+    ``max_pages`` stops early, e.g. one snapshot (``limit=1, max_pages=1``) at the start of a window.
+    """
+    import os
+
+    key = api_key or os.environ.get("OXARCHIVE_API_KEY", "")
+    t0, t1 = (int(pd.Timestamp(x, tz="UTC").timestamp() * 1000) for x in (start, end))
+    query = "&".join(f"{k}={v}" for k, v in {**(params or {}), "start": t0, "end": t1, "limit": limit}.items())
+
+    def pull() -> bytes:
+        if not key:
+            raise RuntimeError("0xArchive needs an API key in OXARCHIVE_API_KEY")
+        rows, cursor, pages = [], None, 0
+        while True:
+            url = f"{OXARCHIVE_HIP3}{route.format(symbol=symbol)}?{query}" + (f"&cursor={cursor}" if cursor else "")
+            for attempt in range(4):
+                try:
+                    with urlopen(Request(url, headers={"X-API-Key": key, "User-Agent": "bvivhedge/1.0"}), timeout=60) as r:
+                        reply = json.loads(r.read())
+                    break
+                except Exception:
+                    if attempt == 3:
+                        raise
+                    time.sleep(2 ** (attempt + 1))
+            rows += reply["data"]
+            pages += 1
+            meta = reply.get("meta", {})
+            if not meta.get("has_more") or not reply["data"] or (max_pages and pages >= max_pages):
+                return json.dumps(rows).encode()
+            cursor = meta["next_cursor"]
+
+    tag = "_".join(f"{k}-{v}" for k, v in sorted((params or {}).items()))
+    name = f"oxarchive_{route.split('/')[0]}_{symbol.replace(':', '-')}_{tag}_{start}_{end}.json"
+    return _cached(name, pull) if _window_ended(end) else pull()
+
+
+def parse_oxarchive_series(payload: bytes, columns: tuple[str, ...]) -> pd.DataFrame:
+    """0xArchive rows {timestamp, <columns>...} -> float columns indexed by timestamp (UTC)."""
+    rows = json.loads(payload)
+    if not rows:
+        return pd.DataFrame(columns=list(columns), dtype=float)
+    df = pd.DataFrame(rows)
+    out = df[list(columns)].astype(float)
+    out.index = pd.to_datetime(df["timestamp"], utc=True)
+    return out[~out.index.duplicated()].sort_index()
 
 
 # --------------------------------------------------------------------------- Volmex BVIV

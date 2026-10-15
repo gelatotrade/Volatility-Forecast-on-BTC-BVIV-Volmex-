@@ -8,9 +8,14 @@ import pandas as pd
 from .constants import DAYS_PER_YEAR
 
 
-def daily_book(pnl: pd.DataFrame, warmup_days: int = 0) -> pd.DataFrame:
-    """Aggregate bar P&L to UTC days, expressed as returns on the BTC notional at the prior close."""
-    day = pnl.index.floor("1D")
+def daily_book(pnl: pd.DataFrame, warmup_days: int = 0, day: pd.Series | None = None) -> pd.DataFrame:
+    """Aggregate bar P&L to UTC days (or to the labels in ``day``, e.g. US trading days), as returns on the
+    BTC notional at the prior close."""
+    if day is not None:
+        keep = day.reindex(pnl.index).notna().to_numpy()
+        pnl, day = pnl[keep], day.reindex(pnl.index)[keep]
+    else:
+        day = pnl.index.floor("1D")
     d = pnl[["btc", "hedge", "funding", "carry", "cost", "traded_notional"]].groupby(day).sum()
     d["notional"] = pnl["notional"].groupby(day).mean()
     d["time_on"] = (pnl["notional"] > 1e-3 * pnl["btc_notional"]).groupby(day).mean()
