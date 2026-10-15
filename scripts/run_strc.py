@@ -5,20 +5,21 @@
 
 STRC (Nasdaq, since 30 July 2025) is a variable-rate perpetual preferred of Strategy Inc., whose assets are
 mostly bitcoin; its perpetual future ``xyz:STRC`` trades on Hyperliquid since 22 June 2026.  The hedging rules
-are the frozen ones of the BVIV study (results/selection.json): only the instrument changes, and the hedge is
-short.  The rules' notional cap carries the BVIV study's risk budget over to STRC: half the BTC notional in
-BVIV, scaled by how much more a dollar of BVIV moves than a dollar of STRC over STRC's first 30 trading days
-(before any hedge is placed).
+keep the parameters frozen in the BVIV study (results/selection.json), including the ratchet's sizing by BVIV
+forecast cheapness; the instrument, cap, costs and execution change, and the hedge is short.  The notional cap
+carries the BVIV study's risk budget over to STRC: half the BTC notional in BVIV, scaled by how much more a
+dollar of BVIV moved than a dollar of STRC (total return) over STRC's first 30 calendar days, before any hedge.
 
-Books are compared over US trading days (16:00 ET to 16:00 ET), so that a weekend BTC move and the Monday gap
-of STRC fall on the same day.  On the cash market a decision is filled at the next hourly close in regular hours
-(the finest STRC history available since the listing); on the perpetual at the next 15-minute mark, around the
-clock.  A cash short pays every dividend and a borrow fee; a perpetual short pays the perpetual's funding.
+Books are compared over US trading days (close to close), so that a weekend BTC move and the Monday gap of STRC
+fall on the same day.  On Nasdaq a decision is filled at the next observed print: the official open, an hourly
+close (the finest STRC history available since the listing) or the official close; on the perpetual at the next
+15-minute mark, around the clock, with slippage measured on its order book at the session closes.  A Nasdaq short
+pays every dividend and a borrow fee (no interest is credited on the short-sale proceeds); a perpetual short pays
+the perpetual's funding.
 """
 
 from __future__ import annotations
 
-import argparse
 import importlib.metadata
 import json
 import platform
@@ -93,70 +94,91 @@ def session_series(s: pd.Series, day: pd.Series) -> pd.Series:
 
 
 # --------------------------------------------------------------------------- descriptive facts
-def stylised(bars: pd.DataFrame, divs: pd.DataFrame, start, end) -> dict:
+def official_closes(panel: dict) -> pd.Series:
+    """STRC's official Nasdaq close by session date (descriptive facts; the hedge trades at its observations)."""
+    return panel["sessions"]["close"]
+
+
+def stylised(bars: pd.DataFrame, panel: dict, start, end) -> dict:
+    """Daily co-movement of STRC (official closes, total return of a long share) and BTC (at each session close)."""
     day = bars["session"]
-    btc = session_series(bars["close"], day).loc[start:end]
-    px = session_series(bars["bviv_mark"].where(bars["hedge_update"]), day).loc[start:end]
+    px = official_closes(panel).loc[start:end]
+    btc = session_series(bars["close"], day).reindex(px.index)
+    divs = panel["dividends"]
     div = divs["amount"].groupby(divs.index).sum().reindex(px.index).fillna(0.0)
-    r_btc = np.log(btc).diff().dropna()
-    r_strc = ((px + div) / px.shift(1) - 1).dropna()          # total return of a long share
+    r_btc = btc.pct_change().dropna()
+    r_strc = ((px + div) / px.shift(1) - 1).dropna()
     r_btc, r_strc = r_btc.align(r_strc, join="inner")
     worst = r_btc <= r_btc.quantile(0.05)
-    beta = np.polyfit(r_btc, r_strc, 1)[0]
-    by_month = pd.DataFrame({"btc": btc.resample("ME").last(), "strc": px.resample("ME").last()}).pct_change().dropna() * 100
+
+    def beta(lo, hi):
+        x, y = r_btc.loc[lo:hi], r_strc.loc[lo:hi]
+        return float(np.polyfit(x, y, 1)[0])
+
     dd = px / px.cummax() - 1
-    worst_strc = r_strc.nsmallest(6)
     return {
         "days": int(len(r_btc)), "start": str(r_btc.index[0].date()), "end": str(r_btc.index[-1].date()),
         "vol_strc": float(r_strc.std() * np.sqrt(252) * 100), "vol_btc": float(r_btc.std() * np.sqrt(252) * 100),
-        "corr": float(r_btc.corr(r_strc)), "beta": float(beta),
-        "corr_down": float(r_btc[r_btc < 0].corr(r_strc[r_btc < 0])), "corr_up": float(r_btc[r_btc > 0].corr(r_strc[r_btc > 0])),
+        "corr": float(r_btc.corr(r_strc)), "beta": float(np.polyfit(r_btc, r_strc, 1)[0]),
+        "beta_before_june": beta(None, "2026-05-29"), "beta_june": beta("2026-06-01", "2026-06-30"),
+        "beta_after_june": beta("2026-07-01", None),
         "tail_days": int(worst.sum()), "tail_btc_mean": float(100 * r_btc[worst].mean()),
-        "tail_strc_mean": float(100 * r_strc[worst].mean()), "tail_beta": float(np.polyfit(r_btc[worst], r_strc[worst], 1)[0]),
+        "tail_strc_mean": float(100 * r_strc[worst].mean()),
         "share_near_par": float(100 * ((px - 100).abs() <= 1.0).mean()), "share_below_95": float(100 * (px < 95).mean()),
         "min_close": float(px.min()), "min_day": str(px.idxmin().date()), "max_drawdown": float(-100 * dd.min()),
-        "first_close": float(px.iloc[0]), "last_close": float(px.iloc[-1]),
-        "dividends_total": float(div.sum()), "dividend_yield_last": float(100 * divs["amount"].iloc[-1] * 24 / 100),
-        "worst_strc_days": [{"day": str(d.date()), "strc": float(100 * v), "btc": float(100 * r_btc[d])} for d, v in worst_strc.items()],
-        "worst_btc_days": [{"day": str(d.date()), "btc": float(100 * v), "strc": float(100 * r_strc[d])} for d, v in r_btc.nsmallest(6).items()],
-        "by_month": {str(k.date())[:7]: {"btc": float(v["btc"]), "strc": float(v["strc"])} for k, v in by_month.iterrows()},
+        "first_close": float(px.iloc[0]), "last_close": float(px.iloc[-1]), "dividends_total": float(div.sum()),
+        "returns": {str(d.date()): {"strc": float(100 * r_strc[d]), "btc": float(100 * r_btc[d])}
+                    for d in pd.DatetimeIndex(["2026-02-05", "2026-02-06", "2026-06-24", "2026-06-25", "2026-06-29"])
+                    if d in r_strc.index},
     }
 
 
 def episode(books: dict, keys: list[str], lo: str, hi: str) -> dict:
-    """Cumulative P&L of the BTC leg and of each hedge (% of BTC notional) over [lo, hi]."""
+    """Cumulative P&L of the BTC leg and of each hedge, net of carry and costs (% of BTC notional), over [lo, hi]."""
     u = books["Unhedged"].loc[lo:hi]
     out = {"days": int(len(u)), "btc_pct": float(100 * u["btc"].sum())}
     for k in keys:
         b = books[k].loc[lo:hi]
-        out[k] = {"hedge_pct": float(100 * (b["hedge"] - b["cost"]).sum()), "offset_pct": float(100 * -(b["hedge"] - b["cost"]).sum() / u["btc"].sum())}
+        out[k] = {"hedge_pct": float(100 * (b["hedge"] - b["cost"]).sum())}
     return out
 
 
+def carry_per_notional(book: pd.DataFrame) -> float:
+    """Carry paid per unit of hedge notional, % a year (dividends and borrow, or funding)."""
+    return float(100 * book["carry"].mean() / book["notional"].mean() * TRADING_DAYS) if book["notional"].mean() > 0 else float("nan")
+
+
 def perp_market(panel: dict, start, end) -> dict:
-    """Funding, basis, off-hours price discovery and size of the perpetual over its first months."""
-    bars, rates, prices, candles, oi, divs = (panel[k] for k in ("bars", "rates", "prices", "candles", "oi", "dividends"))
+    """Funding, basis, off-hours prices and size of the perpetual over its first months.
+
+    0xArchive stamps each mark at the start of the 15 minutes it averages, so the mark just before time t is the
+    row stamped t - 15m.  On weeknights the oracle follows the extended-hours STRC market (post-market, the Blue
+    Ocean overnight session, pre-market); from Friday 20:00 to Sunday 20:05 ET it is internal, set by the
+    perpetual's own book within the discovery bounds.
+    """
+    rates, prices, candles, oi, cal = (panel[k] for k in ("rates", "prices", "candles", "oi", "sessions"))
     w = slice(utc(start), utc(end))
     r = rates.loc[w]
     daily_usd = candles["quote_volume"].loc[w].resample("1D").sum()
-    hourly = panel["hourly"]
-    cash = strc.hourly_closes(hourly)
-    et = hourly.index.tz_convert(strc.ET)
-    opens = hourly["open"].groupby(et.normalize()).first()                      # the opening print of each session
-    closes = cash.groupby(cash.index.tz_convert(strc.ET).normalize()).tail(1)    # last hourly close: the session close
     mark = prices["mark_price"]
+
+    def before(t):
+        return float(mark.asof(t - pd.Timedelta("15min")))
+
+    cal = cal[(cal["open_time"] >= utc(start)) & (cal["close_time"] <= utc(end))]
     rows = []
-    for t0, (d1, open1) in zip(closes.index[:-1], list(opens.items())[1:]):
-        c0 = t0 + pd.Timedelta("15min")
-        o1 = (d1 + pd.Timedelta("9h30min")).tz_convert("UTC")
-        if c0 < utc(start) or o1 > utc(end) or o1 <= c0:
-            continue
-        rows.append({"perp_night": float(mark.asof(o1) / mark.asof(c0) - 1), "cash_gap": float(open1 / closes.loc[t0] - 1),
-                     "weekend": bool((o1 - c0) > pd.Timedelta("1D"))})
+    for (d0, s0), (d1, s1) in zip(cal.iloc[:-1].iterrows(), cal.iloc[1:].iterrows()):
+        gap = float(s1["open"] / s0["close"] - 1)
+        row = {"perp_night": before(s1["open_time"]) / before(s0["close_time"]) - 1, "cash_gap": gap,
+               "weekend": bool(d0.dayofweek == 4 and d1.dayofweek == 0)}
+        if row["weekend"]:          # the internal window only: Friday 20:00 to Sunday 20:05 ET
+            fri = (d0 + pd.Timedelta("20h")).tz_localize(strc.ET).tz_convert("UTC")
+            sun = (d1 - pd.Timedelta("1D") + pd.Timedelta("20h")).tz_localize(strc.ET).tz_convert("UTC")
+            row["perp_internal"] = before(sun) / before(fri) - 1
+        rows.append(row)
     nights = pd.DataFrame(rows)
-    slope = float(np.polyfit(nights["perp_night"], nights["cash_gap"], 1)[0])
-    basis = (mark.reindex(closes.index + pd.Timedelta("15min")).to_numpy() / closes.to_numpy() - 1)
-    basis = pd.Series(basis, index=closes.index).loc[w].dropna()
+    wk = nights[nights["weekend"]]
+    basis = pd.Series([before(c) for c in cal["close_time"]], index=cal.index) / cal["close"] - 1
     return {
         "listing": str(panel["listing"]), "hours": int(len(r)), "funding_mean_hourly": float(r.mean()),
         "funding_annual_pct": float(100 * r.mean() * 24 * 365), "funding_share_negative": float(100 * (r < 0).mean()),
@@ -165,9 +187,12 @@ def perp_market(panel: dict, start, end) -> dict:
         "median_oi": float(oi["open_interest"].loc[w].median()), "max_oi": float(oi["open_interest"].loc[w].max()),
         "median_oi_usd": float((oi["open_interest"] * mark.reindex(oi.index, method="ffill")).loc[w].median()),
         "basis_median_pct": float(100 * basis.median()), "basis_abs_p95_pct": float(100 * basis.abs().quantile(0.95)),
-        "nights": int(len(nights)), "night_corr": float(nights["perp_night"].corr(nights["cash_gap"])), "night_slope": slope,
-        "weekend_corr": float(nights.loc[nights["weekend"], "perp_night"].corr(nights.loc[nights["weekend"], "cash_gap"])),
-        "weekends": int(nights["weekend"].sum()),
+        "nights": int(len(nights)), "night_corr": float(nights["perp_night"].corr(nights["cash_gap"])),
+        "night_slope": float(np.polyfit(nights["perp_night"], nights["cash_gap"], 1)[0]),
+        "weekends": int(len(wk)), "weekend_corr": float(wk["perp_night"].corr(wk["cash_gap"])),
+        "weekend_internal_corr": float(wk["perp_internal"].corr(wk["cash_gap"])),
+        "weekend_internal_max_pct": float(100 * wk["perp_internal"].abs().max()),
+        "weekend_gap_max_pct": float(100 * wk["cash_gap"].abs().max()),
     }
 
 
@@ -175,9 +200,8 @@ def book_depth(symbol: str, times: list[pd.Timestamp], notional_usd: float) -> d
     """Order-book depth of the perpetual at given times (0xArchive snapshots): cost of selling ``notional_usd``."""
     rows = []
     for t in times:
-        t0 = t.strftime("%Y-%m-%dT%H:%M:%S")
-        t1 = (t + pd.Timedelta("2min")).strftime("%Y-%m-%dT%H:%M:%S")
-        snap = json.loads(data.oxarchive_rows("orderbook/{symbol}/l2/history", symbol, t0, t1, limit=1, max_pages=1))
+        snap = json.loads(data.oxarchive_rows("orderbook/{symbol}/l2/history", symbol, t, t + pd.Timedelta("2min"),
+                                              limit=1, max_pages=1))
         if not snap:
             continue
         s = snap[0]
@@ -200,15 +224,12 @@ def book_depth(symbol: str, times: list[pd.Timestamp], notional_usd: float) -> d
 
 # --------------------------------------------------------------------------- main
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--no-book", action="store_true", help="skip the order-book snapshots (0xArchive)")
-    args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     selection = json.loads((ROOT / "results" / "selection.json").read_text())
     sw, rt = selection["switch"], selection["ratchet"]
 
     cashp = strc.build_panel(START, END, "cash", borrow_annual=BORROW)
-    bars, ipo, divs = cashp["bars"], cashp["ipo"], cashp["dividends"]
+    bars, ipo, divs, cal = cashp["bars"], cashp["ipo"], cashp["dividends"], cashp["sessions"]
     day = bars["session"]
     ev_bar = bars.index[(bars.index >= ipo + pd.Timedelta(days=WARMUP_DAYS)) & bars["tradable"].to_numpy()][0]
     ev_day = day.loc[ev_bar]
@@ -217,9 +238,10 @@ def main():
     # ---- the BVIV study's panel: risk budget for the cap, and the BVIV hedge on the same trading days
     bviv_panel = live.build_panel(START, END)
     bb = bviv_panel["bars"]
-    warm = slice(ipo, ev_bar)
-    vol = lambda s: float(np.log(session_series(s.loc[warm], day)).diff().std())  # noqa: E731
-    vol_ratio = vol(bb["bviv_mark"]) / vol(bars["bviv_mark"].where(bars["hedge_update"]).ffill())
+    warm = cal.loc[: day.loc[ev_bar - pd.Timedelta("15min")]]                   # STRC's sessions before the first hedge
+    strc_total = (warm["close"] + divs["amount"].groupby(divs.index).sum().reindex(warm.index).fillna(0.0)) / warm["close"].shift(1)
+    bviv_close = session_series(bb["bviv_mark"], day.reindex(bb.index)).reindex(warm.index)
+    vol_ratio = float(np.log(bviv_close).diff().std() / np.log(strc_total).std())
     cap = HedgeConfig().max_notional_frac * vol_ratio
 
     cfg = HedgeConfig(direction=-1, max_notional_frac=cap, fee_bps=CASH_FEE_BPS, slippage_bps=CASH_SLIPPAGE_BPS,
@@ -229,18 +251,19 @@ def main():
     fc30 = make_forecasts(daily, bars["bviv"].resample("1D").last(), 30, garch=False)["HAR-IV"]
     sig = build_signals(bars, cfg, fc30)
     print(f"STRC from {ipo}, hedging from {ev_bar} (session {ev_day.date()}), cap {cap:.2f}x BTC notional "
-          f"(BVIV/STRC daily vol {vol_ratio:.2f} over the warm-up)", flush=True)
+          f"(BVIV/STRC daily vol {vol_ratio:.2f} over {len(warm) - 1} warm-up returns); hourly gaps: {cashp['hourly_gaps']}", flush=True)
 
-    facts = {"ipo": str(ipo), "eval_start": str(ev_day.date()), "warmup_days": WARMUP_DAYS,
-             "cap": cap, "vol_ratio_warmup": vol_ratio, "selection": selection,
+    facts = {"ipo": str(ipo), "eval_start": str(ev_day.date()), "warmup_days": WARMUP_DAYS, "warmup_returns": len(warm) - 1,
+             "cap": cap, "vol_ratio_warmup": vol_ratio, "selection": selection, "hourly_gaps": cashp["hourly_gaps"],
              "costs": {"cash_fee_bps": CASH_FEE_BPS, "cash_slippage_bps": CASH_SLIPPAGE_BPS, "borrow_annual_pct": 100 * BORROW,
                        "perp_fee_bps": PERP_FEE_BPS},
+             "dividend_rate_last_pct": float(100 * divs["amount"].iloc[-1] * 24 / 100),
              "environment": {"python": platform.python_version(),
                              **{m: importlib.metadata.version(m) for m in ("numpy", "pandas", "scipy", "arch", "statsmodels", "matplotlib")}}}
-    facts["stylised"] = stylised(bars, divs, ev_day, None)
+    facts["stylised"] = stylised(bars, cashp, ev_day, None)
+    facts["stylised_full"] = stylised(bars, cashp, None, None)
     usd = (cashp["daily"]["close"] * cashp["daily"]["volume"]).loc[ipo.floor("1D"):]
     facts["nasdaq_volume"] = {"median_daily_usd": float(usd.median()), "mean_daily_usd": float(usd.mean()), "days": int(len(usd))}
-    facts["stylised_full"] = stylised(bars, divs, None, None)
 
     # ---- frozen rules, placebos, untimed benchmarks
     base_rt = rule_from_key(rt)
@@ -260,6 +283,9 @@ def main():
     metrics = metrics_of(allb)
     metrics.to_csv(OUT / "metrics.csv")
     print(metrics[["es_red", "var_red", "mdd", "hedge_pnl", "funding", "cost", "notional", "turnover"]].round(2), flush=True)
+    res_always, _ = run_rules(bars, cfg, [rule_from_key("always|1")], signals=sig)
+    capped = (sig["mv_all"] >= sig["cap"]).loc[ev_bar:]
+    facts["cap_binding_pct"] = float(100 * capped.mean())
 
     u = books["Unhedged"]["total"].to_numpy()
     fake = np.array([es_red(placebo_books[p.name]["total"].to_numpy(), u) for p in placebos])
@@ -277,75 +303,95 @@ def main():
     bs["placebo mean - always|matched (es)"] = placebo_mean_bootstrap(
         [placebo_books[p.name]["total"] for p in placebos], bench_books["always|matched"]["total"], books["Unhedged"]["total"])
 
-    # ---- where the hedge earned its keep: crashes, concentration, halves of the sample
+    # ---- where the hedge earned its keep: crash days, the June squeeze, horizons
     hedge_net = books["always|1"]["hedge"] - books["always|1"]["cost"]
-    best = hedge_net.idxmax()
     best5 = list(hedge_net.nlargest(5).index)
+    june5 = [d for d in best5 if d.month == 6 and d.year == 2026]
     ub = books["Unhedged"]["total"]
 
-    def es_without(k: str, drop) -> float:
-        return es_red(books[k]["total"].drop(drop).to_numpy(), ub.drop(drop).to_numpy())
+    def es_without(bk: dict, k: str, drop) -> float:
+        drop = [d for d in drop if d in bk[k].index]
+        return es_red(bk[k]["total"].drop(drop).to_numpy(), bk["Unhedged"]["total"].drop(drop).to_numpy())
 
+    tail = ub[ub <= ub.quantile(0.025)].index
     facts["concentration"] = {
-        "best_day": str(best.date()), "best_day_pct": float(100 * hedge_net.max()),
         "best5": [{"day": str(d.date()), "hedge_pct": float(100 * hedge_net[d]), "btc_pct": float(100 * books["Unhedged"]["btc"][d])} for d in best5],
-        "es_ex_best_day": es_without("always|1", [best]), "es_ex_best5": es_without("always|1", best5),
-        "hedge_total_pct": float(100 * hedge_net.sum()),
+        "june_in_best5": len(june5), "june_in_tail": int(sum(d.month == 6 and d.year == 2026 for d in tail)),
+        "tail_days": [str(d.date()) for d in tail],
+        "es_ex_best5": es_without(books, "always|1", best5), "es_ex_feb5": es_without(books, "always|1", [pd.Timestamp("2026-02-05")]),
+        "es_ex_june_best": es_without(books, "always|1", june5), "hedge_total_pct": float(100 * hedge_net.sum()),
     }
-    halves = {"2025-08-29..2026-05-29": ("2025-08-29", "2026-05-29"), "2026-06-01..2026-10-02": ("2026-06-01", "2026-10-02")}
     facts["es_by_period"] = {lab: {k: es_red(books[k]["total"].loc[lo:hi].to_numpy(), ub.loc[lo:hi].to_numpy())
-                                   for k in ("always|1", rt, sw)} for lab, (lo, hi) in halves.items()}
-    facts["episodes"] = {"btc_crash_2026_02": episode(books, ["always|1", rt], "2026-02-02", "2026-02-06"),
-                         "strc_crash_2026_06": episode(books, ["always|1", rt], "2026-06-15", "2026-06-26"),
-                         "btc_drawdown_2025_11": episode(books, ["always|1", rt], "2025-11-03", "2025-11-21")}
+                                   for k in ("always|1", rt, sw)}
+                             for lab, (lo, hi) in {"before June 2026": ("2025-08-29", "2026-05-29"),
+                                                   "from June 2026": ("2026-06-01", "2026-10-02")}.items()}
+    facts["episodes"] = {"feb_week": episode(books, ["always|1", rt], "2026-02-02", "2026-02-06"),
+                         "feb5": episode(books, ["always|1"], "2026-02-05", "2026-02-05"),
+                         "feb6": episode(books, ["always|1"], "2026-02-06", "2026-02-06"),
+                         "june_squeeze": episode(books, ["always|1", rt], "2026-06-15", "2026-06-26"),
+                         "june29": episode(books, ["always|1"], "2026-06-29", "2026-06-29"),
+                         "june_to_end": episode(books, ["always|1"], "2026-06-15", "2026-10-02"),
+                         "nov_drawdown": episode(books, ["always|1", rt], "2025-11-03", "2025-11-21")}
+    pos = res_always["always|1"]["position"]
+    notional_ratio = (-pos * bars["bviv_mark"] / bars["close"]).groupby(day.reindex(pos.index)).last()
+    facts["hedge_ratio_feb"] = {str(d.date()): float(notional_ratio.get(d, np.nan)) for d in pd.DatetimeIndex(["2026-02-02", "2026-02-04", "2026-02-05"])}
 
     # ---- sensitivities (one assumption at a time)
     sens = {}
+
+    def with_borrow(rate: float) -> pd.DataFrame:
+        f = bars["bviv_funding"] - (rate - BORROW) * bars["bviv_mark"] * strc.DT * (bars.index >= ipo)
+        return bars.assign(bviv_funding=f, bviv_carry=f)
+
     for label, b, c in (("same-bar execution", bars, cfg.with_(exec_delay=0)),
                         ("cap 1x BTC notional", bars, cfg.with_(max_notional_frac=1.0)),
                         ("no cap", bars, cfg.with_(max_notional_frac=1e6)),
-                        ("no borrow fee", bars.assign(bviv_funding=bars["bviv_funding"] + BORROW * bars["bviv_mark"] * strc.DT * (bars.index >= ipo)), cfg),
-                        ("borrow 2% a year", bars.assign(bviv_funding=bars["bviv_funding"] - (0.02 - BORROW) * bars["bviv_mark"] * strc.DT * (bars.index >= ipo)), cfg),
+                        ("no borrow fee", with_borrow(0.0), cfg),
+                        ("borrow 2% a year", with_borrow(0.02), cfg),
                         ("ten times the trading costs", bars, cfg.with_(fee_bps=10 * CASH_FEE_BPS, slippage_bps=10 * CASH_SLIPPAGE_BPS))):
         res, _ = run_rules(b, c, [Rule("Unhedged", "unhedged"), *rules], signals=build_signals(b, c, fc30) if c.max_notional_frac != cap else sig)
         bk = session_books(res, day, ev_day)
         sens[label] = {k: book_metrics(v, bk["Unhedged"], per_year=TRADING_DAYS) for k, v in bk.items() if k != "Unhedged"}
-    # UTC calendar days instead of trading days: the weekend mismatch of an exchange-hours hedge
     res, _ = run_rules(bars, cfg, [Rule("Unhedged", "unhedged"), *rules], signals=sig)
-    utc = {k: daily_book(v).loc[ev_bar.floor("1D"):] for k, v in res.items()}
-    sens["UTC calendar days"] = {k: book_metrics(v, utc["Unhedged"]) for k, v in utc.items() if k != "Unhedged"}
+    utc_books = {k: daily_book(v).loc[ev_bar.floor("1D"):] for k, v in res.items()}
+    sens["UTC calendar days"] = {k: book_metrics(v, utc_books["Unhedged"]) for k, v in utc_books.items() if k != "Unhedged"}
     (OUT / "sensitivity.json").write_text(json.dumps(sens, indent=2))
 
-    # ---- the same hedge on the perpetual, from its listing, against the cash hedge over the same days
+    # ---- the same hedge ratio on the perpetual, from its listing, against the Nasdaq hedge over the same days
     perpp = strc.build_panel(START, END, "perp")
     pbars = perpp["bars"]
     listing = perpp["listing"]
     lst_bar = pbars.index[pbars.index >= listing][0]
     lst_day = day.loc[pbars.index[(pbars.index >= listing) & pbars["tradable"].to_numpy()][0]]
     first_full = books["Unhedged"].index[books["Unhedged"].index > lst_day][0]       # the first whole session after listing
-    psig = sig                                                    # the same hedge ratio: only the venue changes
-    pcfg = cfg.with_(fee_bps=PERP_FEE_BPS, slippage_bps=0.0, warmup_bars=int(pbars.index.get_loc(lst_bar)))
-    pres, _ = run_rules(pbars, pcfg, [Rule("Unhedged", "unhedged"), *rules], signals=psig)
+    # slippage from the perpetual's book at the session closes, for the Nasdaq hedge's median size over the window
+    cpos = res_always["always|1"]["position"].loc[lst_bar:]
+    hedge_usd = float((-cpos * bars["bviv_mark"].loc[lst_bar:])[cpos != 0].median())
+    closes = [t for t in cal["close_time"] if lst_bar < t < utc(END)]
+    facts["perp_book"] = book_depth(strc.PERP, closes, hedge_usd)
+    perp_slip = facts["perp_book"]["median_sell_cost_bps"]
+    pcfg = cfg.with_(fee_bps=PERP_FEE_BPS, slippage_bps=perp_slip, warmup_bars=int(pbars.index.get_loc(lst_bar)))
+    pres, _ = run_rules(pbars, pcfg, [Rule("Unhedged", "unhedged"), *rules], signals=sig)   # the same hedge ratio
     pbooks = session_books(pres, pbars["session"], first_full)
     cbooks = {k: v.loc[first_full:] for k, v in allb.items()}
     window = {"start": str(first_full.date()), "end": str(cbooks["Unhedged"].index[-1].date()), "days": int(len(cbooks["Unhedged"])),
+              "perp_slippage_bps": perp_slip,
               "cash": {k: book_metrics(cbooks[k], cbooks["Unhedged"], per_year=TRADING_DAYS) for k in ("always|1", rt, sw)},
-              "perp": {k: book_metrics(pbooks[k], pbooks["Unhedged"], per_year=TRADING_DAYS) for k in ("always|1", rt, sw)}}
+              "perp": {k: book_metrics(pbooks[k], pbooks["Unhedged"], per_year=TRADING_DAYS) for k in ("always|1", rt, sw)},
+              "carry_per_notional_pct": {"cash": carry_per_notional(cbooks["always|1"]), "perp": carry_per_notional(pbooks["always|1"])}}
     both = {"Unhedged": cbooks["Unhedged"], "perp": pbooks["always|1"], "cash": cbooks["always|1"]}
     window["perp - cash (es)"] = live.paired_block_bootstrap(both, "Unhedged", es_red, "perp", "cash")
     window["perp - cash (var)"] = live.paired_block_bootstrap(both, "Unhedged", var_red, "perp", "cash")
+    window["weekend_trades"] = int(((pres["always|1"]["position"].diff().abs() > 0)
+                                    & (pres["always|1"].index.tz_convert(strc.ET).dayofweek >= 5)).sum())
     facts["perp_window"] = window
     facts["perp_market"] = perp_market(perpp, lst_bar, END)
-    pos = pres["always|1"]["position"].loc[lst_bar:]
+    ppos = pres["always|1"]["position"].loc[lst_bar:]
     oi = pbars["open_interest"].loc[lst_bar:]
-    held = (pos != 0) & oi.notna()
-    facts["perp_capacity"] = {"median_contracts_per_btc": float(-pos[held].median()), "median_oi": float(oi[held].median()),
-                              "median_share_of_oi_pct": float(100 * (-pos[held] / oi[held]).median()),
-                              "median_hedge_usd": float((-pos[held] * pbars["bviv_mark"].loc[lst_bar:][held]).median())}
-    if not args.no_book:
-        closes = [t + pd.Timedelta("15min") for t in pbars.index[(pbars.index >= lst_bar) & pbars["hedge_update"].to_numpy()]
-                  if (t + pd.Timedelta("15min")).tz_convert(strc.ET).strftime("%H:%M") == "16:00"]
-        facts["perp_book"] = book_depth(strc.PERP, closes, facts["perp_capacity"]["median_hedge_usd"])
+    held = (ppos != 0) & oi.notna()
+    facts["perp_capacity"] = {"median_contracts_per_btc": float(-ppos[held].median()), "median_oi": float(oi[held].median()),
+                              "median_share_of_oi_pct": float(100 * (-ppos[held] / oi[held]).median()),
+                              "median_hedge_usd": float((-ppos[held] * pbars["bviv_mark"].loc[lst_bar:][held]).median())}
 
     # ---- against the BVIV hedge on the same trading days, and both at half size
     bcfg = HedgeConfig(fee_bps=6.0, slippage_bps=10.0, exec_delay=1, warmup_days=int((bviv_panel["perp_start"] - bb.index[0]).days),
@@ -359,14 +405,25 @@ def main():
            "STRC ratchet": books[rt], "BVIV ratchet": bbooks[rt], "half each, ratchets": combine(bbooks[rt], books[rt])}
     assert np.allclose(cmp["BVIV"]["btc"], cmp["STRC"]["btc"])
     facts["vs_bviv"] = {k: book_metrics(v, cmp["Unhedged"], per_year=TRADING_DAYS) for k, v in cmp.items() if k != "Unhedged"}
-    facts["vs_bviv"]["hedge_corr"] = float((cmp["STRC"]["hedge"] - cmp["STRC"]["cost"]).corr(cmp["BVIV"]["hedge"] - cmp["BVIV"]["cost"]))
+    net = {k: cmp[k]["hedge"] - cmp[k]["cost"] for k in ("STRC", "BVIV")}
+    feb56 = pd.DatetimeIndex(["2026-02-05", "2026-02-06"])
+    facts["vs_bviv_extra"] = {
+        "hedge_corr": float(net["STRC"].corr(net["BVIV"])),
+        "hedge_corr_ex_feb": float(net["STRC"].drop(feb56).corr(net["BVIV"].drop(feb56))),
+        "bviv_es_ex_feb5": es_without(cmp, "BVIV", [pd.Timestamp("2026-02-05")]),
+        "feb_week": episode(cmp, ["STRC", "BVIV"], "2026-02-02", "2026-02-06"),
+        "june_squeeze": episode(cmp, ["STRC", "BVIV"], "2026-06-15", "2026-06-26"),
+        "es_horizon": {str(h): {k: es_red(cmp[k]["total"].rolling(h).sum().dropna().to_numpy(),
+                                          cmp["Unhedged"]["total"].rolling(h).sum().dropna().to_numpy())
+                                for k in ("STRC", "BVIV", "half each", "STRC ratchet")} for h in (1, 5, 10)},
+    }
     for a, b in (("half each", "BVIV"), ("half each", "STRC"), ("STRC", "BVIV")):
         bs[f"{a} - {b} (es)"] = live.paired_block_bootstrap(cmp, "Unhedged", es_red, a, b)
+        bs[f"{a} - {b} (var)"] = live.paired_block_bootstrap(cmp, "Unhedged", var_red, a, b)
     (OUT / "bootstrap.json").write_text(json.dumps(bs, indent=2))
 
-    # ---- daily series for the figure
-    px = session_series(bars["bviv_mark"].where(bars["hedge_update"]), day)
-    daily_out = pd.DataFrame({"btc": session_series(bars["close"], day), "strc": px,
+    # ---- daily series for the figure (official closes for STRC; the perpetual's mark before 16:00 ET)
+    daily_out = pd.DataFrame({"btc": session_series(bars["close"], day), "strc": official_closes(cashp),
                               "perp": session_series(pbars["bviv_mark"].where(pbars["tradable"]), pbars["session"]),
                               "bviv": session_series(bb["bviv_mark"], bday)})
     for k, b in (("strc_always", books["always|1"]), ("strc_ratchet", books[rt]), ("bviv_always", bbooks["always|1"]),
@@ -377,7 +434,8 @@ def main():
     facts["eval_days"] = int(len(books["Unhedged"]))
     facts["eval_end"] = str(books["Unhedged"].index[-1].date())
     (OUT / "facts.json").write_text(json.dumps(facts, indent=2, default=float))
-    print(json.dumps({k: facts[k] for k in ("placebo", "concentration", "episodes", "perp_market", "perp_capacity")}, indent=1, default=float))
+    print(json.dumps({k: facts[k] for k in ("concentration", "episodes", "hedge_ratio_feb", "vs_bviv_extra", "perp_market",
+                                            "perp_capacity", "perp_book")}, indent=1, default=float))
     print(json.dumps({k: {kk: round(vv, 2) for kk, vv in v.items() if kk in ("es_red", "var_red", "hedge_cost", "funding")}
                       for k, v in facts["vs_bviv"].items() if isinstance(v, dict)}, indent=1))
 

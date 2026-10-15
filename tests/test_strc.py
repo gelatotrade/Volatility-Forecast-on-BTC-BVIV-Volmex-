@@ -2,9 +2,11 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from bvivhedge import data, strc
 from bvivhedge.hedge import HedgeConfig, Rule, backtest, build_signals, hold_between, run_rules, synchronous_moves
+from bvivhedge.metrics import daily_book
 
 
 def test_parse_yahoo_chart_drops_bars_without_close():
@@ -28,19 +30,28 @@ def test_parse_nasdaq_dividends():
     assert np.isclose(d["amount"].iloc[0], 0.95833333) and pd.isna(d["declared"].iloc[0])
 
 
-def _hourly(day: str, opens_et: list[str], closes: list[float]) -> pd.DataFrame:
+def _bars_et(day: str, opens_et: list[str], closes: list[float]) -> pd.DataFrame:
     idx = pd.DatetimeIndex([pd.Timestamp(f"{day} {h}", tz=strc.ET) for h in opens_et]).tz_convert("UTC")
     return pd.DataFrame({"open": closes, "high": closes, "low": closes, "close": closes, "volume": 1.0}, index=idx)
 
 
-def test_hourly_closes_end_on_the_half_hour_and_at_the_close():
-    full = _hourly("2026-03-10", ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"], list(range(7)))
-    half = _hourly("2025-11-28", ["09:30", "10:30", "11:30", "12:30", "13:00"], list(range(5)))
-    s = strc.hourly_closes(pd.concat([half, full]))
-    ends = (s.index + pd.Timedelta("15min")).tz_convert(strc.ET).strftime("%Y-%m-%d %H:%M").tolist()
-    assert ends[:4] == ["2025-11-28 10:30", "2025-11-28 11:30", "2025-11-28 12:30", "2025-11-28 13:00"]
-    assert s.iloc[3] == 4.0                                    # the 13:00 print replaces the 12:30 bar's close
-    assert ends[-2:] == ["2026-03-10 15:30", "2026-03-10 16:00"]
+def _daily(days: list[str], opens: list[float], closes: list[float]) -> pd.DataFrame:
+    idx = pd.DatetimeIndex([pd.Timestamp(f"{d} 09:30", tz=strc.ET) for d in days]).tz_convert("UTC")
+    return pd.DataFrame({"open": opens, "high": closes, "low": closes, "close": closes, "volume": 1.0}, index=idx)
+
+
+def test_cash_observations_follow_the_exchange_calendar():
+    # 28 Nov 2025 closes at 13:00 ET; on 30 Jan 2026 the hourly source stops at 11:30 ET
+    hourly = pd.concat([_bars_et("2025-11-28", ["09:30", "10:30", "11:30", "12:30", "13:00"], [1, 2, 3, 4, 5]),
+                        _bars_et("2026-01-30", ["09:30", "10:30"], [10, 11])])
+    daily = _daily(["2025-11-28", "2026-01-30"], [0.5, 9.5], [5.5, 12.0])
+    obs = strc.cash_observations(hourly, daily)
+    et = [(t.tz_convert(strc.ET).strftime("%Y-%m-%d %H:%M"), v) for t, v in obs.items()]
+    assert et[:5] == [("2025-11-28 09:30", 0.5), ("2025-11-28 10:30", 1), ("2025-11-28 11:30", 2),
+                      ("2025-11-28 12:30", 3), ("2025-11-28 13:00", 5.5)]          # the official close at the early close
+    assert et[5:] == [("2026-01-30 09:30", 9.5), ("2026-01-30 10:30", 10), ("2026-01-30 11:30", 11),
+                      ("2026-01-30 16:00", 12.0)]                                   # not a half day: the close is filled
+    assert strc.hourly_gaps(hourly, daily) == ["2026-01-30"]
 
 
 def test_session_labels_put_the_weekend_on_monday():
@@ -128,3 +139,87 @@ def test_hyperliquid_paging_stops_when_the_reply_repeats(monkeypatch):
     monkeypatch.setattr(data, "_window_ended", lambda end: False)
     rows = json.loads(data.fetch_hyperliquid("candles", "xyz:TEST", "2026-06-22", "2026-06-23", "1h"))
     assert [r["t"] for r in rows] == [t0 + k * hour for k in range(5)]
+
+
+def test_dividend_is_booked_before_the_ex_date_open():
+    idx = pd.date_range("2026-07-14 19:00", "2026-07-15 15:00", freq="15min", tz="UTC")
+    update = np.zeros(len(idx), dtype=bool)
+    opening = pd.Timestamp("2026-07-15 13:15", tz="UTC")          # bar closing at 9:30 ET (EDT)
+    update[[idx.get_loc(pd.Timestamp("2026-07-14 19:45", tz="UTC")), idx.get_loc(opening)]] = True
+    divs = pd.DataFrame({"amount": [0.5]}, index=pd.DatetimeIndex(["2026-07-15"]))
+    f = strc.dividend_per_bar(divs, idx, update)
+    assert f.sum() == -0.5 and f.idxmin() == opening - pd.Timedelta("15min")
+
+
+def test_perp_funding_is_paid_by_the_position_held_at_settlement():
+    idx = pd.date_range("2026-08-01", periods=12, freq="15min", tz="UTC")
+    rates = pd.Series([0.001], index=pd.DatetimeIndex([pd.Timestamp("2026-08-01 02:00:00.002", tz="UTC")]))
+    oracle = pd.Series(np.arange(12, dtype=float) + 90.0, index=idx)   # stamped at the start of each 15m average
+    f = strc.perp_funding_per_bar(rates, oracle, idx)
+    row = pd.Timestamp("2026-08-01 01:30", tz="UTC")                   # E - 30m: backtest charges it on bar E - 15m
+    assert np.isclose(f[row], 0.001 * oracle[pd.Timestamp("2026-08-01 01:45", tz="UTC")]) and np.isclose(f.sum(), f[row])
+
+
+def test_daily_book_over_trading_day_labels():
+    bars = _two_asset_bars(n=8)
+    pnl = backtest(bars, np.full(8, -5.0), HedgeConfig(fee_bps=0.0, slippage_bps=0.0))
+    day = pd.Series([pd.Timestamp("2026-01-02")] * 4 + [pd.Timestamp("2026-01-05")] * 3 + [pd.NaT], index=bars.index)
+    book = daily_book(pnl, day=day)
+    assert list(book.index) == [pd.Timestamp("2026-01-02"), pd.Timestamp("2026-01-05")]
+    assert np.isclose(book["btc"].iloc[0] * pnl["btc_notional"].iloc[0], pnl["btc"].iloc[:4].sum())
+
+
+def test_run_rules_fills_only_on_tradable_bars():
+    bars = _two_asset_bars(n=600)
+    bars["tradable"] = np.arange(600) % 7 == 0
+    res, _ = run_rules(bars, HedgeConfig(direction=-1, max_notional_frac=10.0, warmup_days=1, exec_delay=1),
+                       [Rule("always", "always")])
+    changes = np.flatnonzero(np.diff(res["always"]["position"].to_numpy()) != 0) + 1
+    assert len(changes) and bars["tradable"].to_numpy()[changes].all()
+
+
+def test_oxarchive_rows_follow_the_cursor_and_stop(monkeypatch, tmp_path):
+    pages = {None: {"data": [{"timestamp": "2026-07-01T00:00:00Z", "x": 1}], "meta": {"has_more": True, "next_cursor": "c1"}},
+             "c1": {"data": [{"timestamp": "2026-07-01T00:15:00Z", "x": 2}], "meta": {"has_more": False}}}
+    seen = []
+
+    class Reply:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(self.body).encode()
+
+    def fake_urlopen(req, timeout=60):
+        cursor = req.full_url.split("cursor=")[1] if "cursor=" in req.full_url else None
+        seen.append(cursor)
+        return Reply(pages[cursor])
+
+    monkeypatch.setattr(data, "urlopen", fake_urlopen)
+    monkeypatch.setattr(data, "RAW", tmp_path)
+    rows = json.loads(data.oxarchive_rows("prices/{symbol}", "xyz:TEST", "2026-07-01", "2026-07-02", {"interval": "15m"}, api_key="k"))
+    assert [r["x"] for r in rows] == [1, 2] and seen == [None, "c1"]
+    seen.clear()
+    one = json.loads(data.oxarchive_rows("prices/{symbol}", "xyz:TEST", pd.Timestamp("2026-07-03 20:00", tz="UTC"),
+                                         pd.Timestamp("2026-07-03 20:02", tz="UTC"), api_key="k", max_pages=1))
+    assert len(one) == 1 and seen == [None]
+    assert all(":" not in f.name for f in tmp_path.iterdir())          # cache names are portable
+    monkeypatch.delenv("OXARCHIVE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        data.oxarchive_rows("prices/{symbol}", "xyz:TEST", "2026-07-05", "2026-07-06")
+
+
+def test_yahoo_chart_is_cut_to_the_window(monkeypatch):
+    ts = [int(pd.Timestamp(x, tz="UTC").timestamp()) for x in ("2026-10-02 19:30", "2026-10-05 13:30")]
+    payload = json.dumps({"chart": {"result": [{"meta": {}, "timestamp": ts, "indicators": {"quote": [
+        {"open": [1.0, 2.0], "high": [1.0, 2.0], "low": [1.0, 2.0], "close": [1.0, 2.0], "volume": [1.0, 1.0]}]}}]}}).encode()
+    monkeypatch.setattr(data, "_get", lambda url, retries=4: payload)
+    monkeypatch.setattr(data, "_window_ended", lambda end: False)
+    bars = data.fetch_yahoo_chart("STRC", "60m", "2026-10-01", "2026-10-04")
+    assert len(bars) == 1 and bars.index[0] == pd.Timestamp("2026-10-02 19:30", tz="UTC")

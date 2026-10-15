@@ -1,6 +1,6 @@
-"""Live market data: BTC 15m klines, BTC perp funding, the BVIV index and its perpetual.
+"""Live market data: BTC 15m klines, BTC perp funding, the BVIV index and its perpetual, STRC.
 
-Sources (all public; the study needs no key):
+Sources of the BVIV study (all public; it needs no key):
 
 * Binance bulk archive ``data.binance.vision`` -- BTCUSDT 15m klines (spot or USD-M);
   ``quote_volume / volume`` is each bar's exact VWAP.
@@ -22,8 +22,8 @@ For the STRC study (Strategy's Stretch preferred stock, Nasdaq ``STRC``, and its
 * Yahoo chart API -- STRC hourly and daily bars (hourly history reaches back 730 days);
 * Nasdaq ``api.nasdaq.com`` -- STRC dividends (ex-dates and amounts);
 * Hyperliquid ``api.hyperliquid.xyz/info`` -- the perpetual's hourly candles and hourly funding;
-* 0xArchive ``api.0xarchive.io`` (``OXARCHIVE_API_KEY``) -- the perpetual's 15m candles and its hourly
-  mark, oracle price, open interest and order-book snapshots, which the public API does not keep.
+* 0xArchive ``api.0xarchive.io`` (``OXARCHIVE_API_KEY``, not public) -- the perpetual's 15m candles and marks,
+  oracle prices, hourly open interest and order-book snapshots, which the public API does not keep.
 
 Parsers are separated from fetchers so they can be tested offline.  Every
 fetch of a window that has already ended is cached under ``data/raw`` (a partial month
@@ -413,8 +413,18 @@ NASDAQ_API = "https://api.nasdaq.com/api/quote/"
 OXARCHIVE_HIP3 = "https://api.0xarchive.io/v1/hyperliquid/hip3/"
 
 
-def _window_ended(end: str) -> bool:
-    return pd.Timestamp(end, tz="UTC") <= pd.Timestamp.now(tz="UTC")
+def _utc(x) -> pd.Timestamp:
+    t = pd.Timestamp(x)
+    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+
+
+def _stamp(x) -> str:
+    """A date as given, or a time as 20260623T200000 (no colons, so cache names are valid on every file system)."""
+    return str(x) if isinstance(x, str) and len(x) <= 10 else _utc(x).strftime("%Y%m%dT%H%M%S")
+
+
+def _window_ended(end) -> bool:
+    return _utc(end) <= pd.Timestamp.now(tz="UTC")
 
 
 def parse_yahoo_chart(payload: bytes) -> pd.DataFrame:
@@ -492,7 +502,7 @@ def oxarchive_rows(route: str, symbol: str, start: str, end: str, params: dict |
     import os
 
     key = api_key or os.environ.get("OXARCHIVE_API_KEY", "")
-    t0, t1 = (int(pd.Timestamp(x, tz="UTC").timestamp() * 1000) for x in (start, end))
+    t0, t1 = (int(_utc(x).timestamp() * 1000) for x in (start, end))
     query = "&".join(f"{k}={v}" for k, v in {**(params or {}), "start": t0, "end": t1, "limit": limit}.items())
 
     def pull() -> bytes:
@@ -518,7 +528,7 @@ def oxarchive_rows(route: str, symbol: str, start: str, end: str, params: dict |
             cursor = meta["next_cursor"]
 
     tag = "_".join(f"{k}-{v}" for k, v in sorted((params or {}).items()))
-    name = f"oxarchive_{route.split('/')[0]}_{symbol.replace(':', '-')}_{tag}_{start}_{end}.json"
+    name = "_".join(filter(None, ["oxarchive", route.split("/")[0], symbol.replace(":", "-"), tag, _stamp(start), _stamp(end)])) + ".json"
     return _cached(name, pull) if _window_ended(end) else pull()
 
 
