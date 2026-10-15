@@ -21,7 +21,7 @@ For the STRC study (Strategy's Stretch preferred stock, Nasdaq ``STRC``, and its
 
 * Yahoo chart API -- STRC hourly and daily bars (hourly history reaches back 730 days);
 * Nasdaq ``api.nasdaq.com`` -- STRC dividends (ex-dates and amounts);
-* Hyperliquid ``api.hyperliquid.xyz/info`` -- the perpetual's hourly candles and hourly funding;
+* Hyperliquid ``api.hyperliquid.xyz/info`` -- the perpetual's hourly funding (candles too, though the study takes them from 0xArchive);
 * 0xArchive ``api.0xarchive.io`` (``OXARCHIVE_API_KEY``, not public) -- the perpetual's 15m candles and marks,
   oracle prices, hourly open interest and order-book snapshots, which the public API does not keep.
 

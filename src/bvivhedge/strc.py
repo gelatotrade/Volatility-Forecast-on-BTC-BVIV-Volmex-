@@ -141,9 +141,11 @@ def build_panel(start: str = "2023-01-01", end: str = "2026-10-04", venue: str =
         rates = data.parse_hyperliquid_funding(data.fetch_hyperliquid("funding", PERP, "2026-06-22", end))
         listing = candles.index[candles["trade_count"] > 0][0]
         in_bar = prices.reindex(bars.index)                       # the average over [T, T + 15m): bar T's mark
-        live = (bars.index >= listing) & in_bar["mark_price"].notna().to_numpy()
-        mark = mark.where(~live, in_bar["mark_price"])
-        update = update & ~(bars.index >= listing) | live
+        after = bars.index >= listing
+        live = after & in_bar["mark_price"].notna().to_numpy()
+        # from the listing on the hedge is priced by the perpetual alone (its last mark across a missing sample)
+        mark = mark.where(~after, in_bar["mark_price"].where(after).ffill())
+        update = update & ~after | live
         tradable = live.copy()
         bars["perp_mid"] = in_bar["mid_price"].where(live)
         bars["perp_oracle"] = in_bar["oracle_price"].where(live)

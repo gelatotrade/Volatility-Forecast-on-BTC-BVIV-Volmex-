@@ -223,3 +223,72 @@ def test_yahoo_chart_is_cut_to_the_window(monkeypatch):
     monkeypatch.setattr(data, "_window_ended", lambda end: False)
     bars = data.fetch_yahoo_chart("STRC", "60m", "2026-10-01", "2026-10-04")
     assert len(bars) == 1 and bars.index[0] == pd.Timestamp("2026-10-02 19:30", tz="UTC")
+
+
+def _fake_inputs(monkeypatch):
+    """Monday 6 to Wednesday 8 July 2026 (Friday 3 July is a holiday), hourly STRC, a perpetual listed on Tuesday."""
+    idx = pd.date_range("2026-07-04", "2026-07-09", freq="15min", tz="UTC", inclusive="left")
+    btc = pd.DataFrame({"open": 60_000.0, "high": 60_000.0, "low": 60_000.0, "close": 60_000.0 + np.arange(len(idx)),
+                        "volume": 1.0, "quote_volume": 60_000.0}, index=idx)
+    days = ["2026-07-06", "2026-07-07", "2026-07-08"]
+    hours = ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"]
+    hourly = pd.concat([_bars_et(d, hours, [100.0 + i + 0.1 * k for k in range(7)]) for i, d in enumerate(days)])
+    daily = _daily(days, [99.9, 100.9, 101.9], [100.7, 101.7, 102.7])
+    divs = pd.DataFrame({"amount": [0.5], "record_date": pd.NaT, "pay_date": pd.NaT, "declared": pd.NaT},
+                        index=pd.DatetimeIndex(["2026-07-06"]))                # ex-date the Monday after the holiday
+    listing = pd.Timestamp("2026-07-07 18:00", tz="UTC")
+    perp_idx = idx[idx >= listing]
+    marks = pd.Series(200.0 + np.arange(len(perp_idx)), index=perp_idx)
+    marks = marks.drop(perp_idx[5])                                            # one missing 15-minute sample
+    oi_idx = pd.date_range(listing, idx[-1], freq="1h")
+    payloads = {
+        "prices": [{"timestamp": t.isoformat(), "mark_price": m, "oracle_price": m, "mid_price": m} for t, m in marks.items()],
+        "candles": [{"timestamp": t.isoformat(), "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1, "quote_volume": 1,
+                     "trade_count": 3} for t in perp_idx],
+        "openinterest": [{"timestamp": t.isoformat(), "open_interest": 1000.0 + k} for k, t in enumerate(oi_idx)],
+    }
+    funding = [{"coin": "xyz:STRC", "fundingRate": "-0.0001", "premium": "0", "time": int((t + pd.Timedelta("1ms")).timestamp() * 1000)}
+               for t in oi_idx[1:]]
+    monkeypatch.setattr(data, "fetch_binance_klines", lambda *a, **k: btc)
+    monkeypatch.setattr(data, "fetch_volmex_public", lambda *a, **k: pd.Series(50.0, index=idx))
+    monkeypatch.setattr(data, "fetch_yahoo_chart", lambda symbol, interval, start, end: hourly if interval == "60m" else daily)
+    monkeypatch.setattr(data, "fetch_nasdaq_dividends", lambda symbol, until: divs)
+    monkeypatch.setattr(data, "oxarchive_rows", lambda route, *a, **k: json.dumps(payloads[route.split("/")[0]]).encode())
+    monkeypatch.setattr(data, "fetch_hyperliquid", lambda kind, *a, **k: json.dumps(funding).encode())
+    return listing, perp_idx[5]
+
+
+def test_build_panel_cash(monkeypatch):
+    _fake_inputs(monkeypatch)
+    p = strc.build_panel("2026-07-04", "2026-07-09", "cash", borrow_annual=0.01)
+    b = p["bars"]
+    obs = b.index[b["hedge_update"]]
+    assert ((obs + strc.BAR).tz_convert(strc.ET).strftime("%H:%M")[:9] == ["09:30", "10:30", "11:30", "12:30", "13:30",
+                                                                          "14:30", "15:30", "16:00", "09:30"]).all()
+    assert (b["tradable"] == b["hedge_update"]).all()
+    first = obs[0]                                                     # the Monday open carries the ex-dividend drop
+    assert np.isclose(b["bviv_funding"].loc[first - strc.BAR], -0.5)   # no borrow fee before the first price
+    assert np.isclose(b["bviv_funding"].loc[first], -0.01 * b["bviv_mark"].loc[first] * strc.DT)
+    assert b["session"].loc[pd.Timestamp("2026-07-05 12:00", tz="UTC")] == pd.Timestamp("2026-07-06")   # Sunday -> Monday
+    assert b.loc[first, "bviv_mark"] == 99.9 and b["bviv_mark"].loc[obs[7]] == 100.7   # official open and close
+
+
+def test_build_panel_perp(monkeypatch):
+    listing, missing = _fake_inputs(monkeypatch)
+    p = strc.build_panel("2026-07-04", "2026-07-09", "perp")
+    b = p["bars"]
+    before, after = b.index < listing, b.index >= listing
+    assert not b["tradable"][before].any() and b["tradable"][after].sum() == after.sum() - 1
+    assert not b.loc[missing, "tradable"] and b.loc[missing, "bviv_mark"] == b.loc[missing - strc.BAR, "bviv_mark"]
+    assert b.loc[listing, "bviv_mark"] == 200.0                        # the bar opening at T carries the average stamped T
+    oi = b["open_interest"].dropna()
+    assert oi.index[0] == listing + pd.Timedelta("45min") and oi.iloc[0] == 1000.0     # known when its hour has ended
+    assert (b["bviv_funding"][before] == 0).all() and (b["bviv_funding"][after] < 0).any()
+
+
+def test_parse_oxarchive_series_and_dividend_cut():
+    rows = json.dumps([{"timestamp": "2026-07-01T00:15:00Z", "mark_price": "2"}, {"timestamp": "2026-07-01T00:00:00Z", "mark_price": "1"},
+                       {"timestamp": "2026-07-01T00:00:00Z", "mark_price": "1"}]).encode()
+    s = data.parse_oxarchive_series(rows, ("mark_price",))
+    assert s["mark_price"].tolist() == [1.0, 2.0] and str(s.index.tz) == "UTC"
+    assert data.parse_oxarchive_series(b"[]", ("mark_price",)).empty

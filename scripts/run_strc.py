@@ -170,7 +170,7 @@ def perp_market(panel: dict, start, end) -> dict:
     for (d0, s0), (d1, s1) in zip(cal.iloc[:-1].iterrows(), cal.iloc[1:].iterrows()):
         gap = float(s1["open"] / s0["close"] - 1)
         row = {"perp_night": before(s1["open_time"]) / before(s0["close_time"]) - 1, "cash_gap": gap,
-               "weekend": bool(d0.dayofweek == 4 and d1.dayofweek == 0)}
+               "weekend": bool(d0.dayofweek == 4 and d1.dayofweek == 0), "monday": d1}
         if row["weekend"]:          # the internal window only: Friday 20:00 to Sunday 20:05 ET
             fri = (d0 + pd.Timedelta("20h")).tz_localize(strc.ET).tz_convert("UTC")
             sun = (d1 - pd.Timedelta("1D") + pd.Timedelta("20h")).tz_localize(strc.ET).tz_convert("UTC")
@@ -193,6 +193,11 @@ def perp_market(panel: dict, start, end) -> dict:
         "weekend_internal_corr": float(wk["perp_internal"].corr(wk["cash_gap"])),
         "weekend_internal_max_pct": float(100 * wk["perp_internal"].abs().max()),
         "weekend_gap_max_pct": float(100 * wk["cash_gap"].abs().max()),
+        "weekend_big_gap_day": str(wk["monday"].loc[wk["cash_gap"].abs().idxmax()].date()),
+        "weekend_big_gap_internal_pct": float(100 * wk["perp_internal"].loc[wk["cash_gap"].abs().idxmax()]),
+        "weekend_big_gap_pct": float(100 * wk["cash_gap"].loc[wk["cash_gap"].abs().idxmax()]),
+        "weekend_internal_corr_ex_big": float(wk.drop(wk["cash_gap"].abs().idxmax())["perp_internal"]
+                                              .corr(wk.drop(wk["cash_gap"].abs().idxmax())["cash_gap"])),
     }
 
 
@@ -216,6 +221,7 @@ def book_depth(symbol: str, times: list[pd.Timestamp], notional_usd: float) -> d
                      "bid_depth_usd_1pct": float((bids[bids[:, 0] >= mid * 0.99, 1] * bids[bids[:, 0] >= mid * 0.99, 0]).sum()),
                      "fill_share": float(min(1.0, bids[:, 1].sum() / qty)), "sell_cost_bps": float(1e4 * cost)})
     df = pd.DataFrame(rows)
+    df.to_csv(OUT / "book_snapshots.csv", index=False)
     return {"snapshots": int(len(df)), "notional_usd": float(notional_usd),
             "median_spread_bps": float(df["spread_bps"].median()), "median_depth_1pct_usd": float(df["bid_depth_usd_1pct"].median()),
             "median_sell_cost_bps": float(df["sell_cost_bps"].median()), "p90_sell_cost_bps": float(df["sell_cost_bps"].quantile(0.9)),
@@ -238,7 +244,7 @@ def main():
     # ---- the BVIV study's panel: risk budget for the cap, and the BVIV hedge on the same trading days
     bviv_panel = live.build_panel(START, END)
     bb = bviv_panel["bars"]
-    warm = cal.loc[: day.loc[ev_bar - pd.Timedelta("15min")]]                   # STRC's sessions before the first hedge
+    warm = cal.loc[cal.index < ev_day]                                          # STRC's sessions before the first hedge
     strc_total = (warm["close"] + divs["amount"].groupby(divs.index).sum().reindex(warm.index).fillna(0.0)) / warm["close"].shift(1)
     bviv_close = session_series(bb["bviv_mark"], day.reindex(bb.index)).reindex(warm.index)
     vol_ratio = float(np.log(bviv_close).diff().std() / np.log(strc_total).std())

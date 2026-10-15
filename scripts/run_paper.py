@@ -552,11 +552,12 @@ def strc_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path) -> dict:
         "strc june best": words[conc["june_in_best5"]], "strc june tail": words[conc["june_in_tail"]],
         "strc feb five hedge": pct(ep["feb5"]["always|1"]["hedge_pct"]), "strc feb six hedge": pct(-ep["feb6"]["always|1"]["hedge_pct"]),
         "strc feb week hedge": signed(ep["feb_week"]["always|1"]["hedge_pct"], 1),
-        "strc feb ratio": f"{facts['hedge_ratio_feb']['2026-02-05']:.1f}",
+        "strc feb ratio": f"{facts['hedge_ratio_feb']['2026-02-04']:.1f}",
         "strc es five": hor["5"]["STRC"], "strc es ten": hor["10"]["STRC"], "strc bviv es ten": hor["10"]["BVIV"],
         "strc jun days": f"{ep['june_squeeze']['days']}", "strc jun hedge": pct(ep["june_squeeze"]["always|1"]["hedge_pct"]),
         "strc jun btc": pct(-ep["june_squeeze"]["btc_pct"]), "strc jun bviv": pct(vx["june_squeeze"]["BVIV"]["hedge_pct"]),
         "strc jun back": pct(-ep["june29"]["always|1"]["hedge_pct"]), "strc jun end": signed(ep["june_to_end"]["always|1"]["hedge_pct"], 1),
+        "strc jun end btc": f"{ep['june_to_end']['btc_pct']:.0f}",
         "strc feb bviv": pct(vx["feb_week"]["BVIV"]["hedge_pct"]),
         "strc nov btc": f"{-ep['nov_drawdown']['btc_pct']:.0f}", "strc nov hedge": pct(ep["nov_drawdown"]["always|1"]["hedge_pct"]),
         # sensitivities
@@ -566,8 +567,12 @@ def strc_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path) -> dict:
         "strc fund perp": f"{-pm['funding_annual_pct']:.1f}", "strc fund jun": f"{months['2026-06']:.0f}",
         "strc fund sep": f"{-months['2026-09']:.0f}",
         "strc carry cash": f"{win['carry_per_notional_pct']['cash']:.1f}", "strc carry perp": f"{win['carry_per_notional_pct']['perp']:.1f}",
+        "strc carry gap": f"{win['carry_per_notional_pct']['cash'] - win['carry_per_notional_pct']['perp']:.1f}",
         "strc night corr": f"{pm['night_corr']:.2f}", "strc nights": f"{pm['nights']}",
-        "strc weekend corr": f"{pm['weekend_internal_corr']:.2f}", "strc weekends": f"{pm['weekends']}",
+        "strc weekend corr": f"{pm['weekend_internal_corr_ex_big']:.2f}", "strc weekends": f"{pm['weekends'] - 1}",
+        "strc weekend big": pct(pm["weekend_big_gap_internal_pct"]), "strc weekend big gap": pct(pm["weekend_big_gap_pct"]),
+        "strc weekend big day": date(pm["weekend_big_gap_day"]),
+        "strc listing": date(pm["listing"][:10]),
         "strc weekend max": pct(pm["weekend_internal_max_pct"]), "strc gap max": f"{pm['weekend_gap_max_pct']:.0f}",
         "strc perp usd": pct(pm["median_daily_usd"] / 1e6), "strc perp oi": f"{pm['median_oi_usd'] / 1e6:.0f}",
         "strc cash usd": f"{facts['nasdaq_volume']['median_daily_usd'] / 1e6:.0f}",
@@ -632,19 +637,20 @@ def write_readme_results(live: pd.DataFrame, rows: list[tuple[str, str]], nums: 
         f"paths) the ratchet beats the always-on hedge by {n['d_es_ratchet']} pp on average but its placebo by only "
         f"{n['d_es_placebo']} pp. "
         f"Without a core hedge, VWAP timing adds {n['live_grid_zero']} pp on live data.",
-        *([f"6. **Short STRC protects for a day, not a week.** Shorting Strategy's STRC preferred on Nasdaq "
+        *([f"6. **Short STRC protects for days, not weeks.** Shorting Strategy's STRC preferred on Nasdaq "
            f"({n['strc_eval_start']} to {n['strc_eval_end']}, {n['strc_eval_days']} US trading days, same frozen rules) cut daily ES by "
            f"{n['strc_es_always']}% (CI {n['strc_es_always_ci']}) and variance by {n['strc_var_always']}%, at "
            f"{n['strc_cost_always']}% of BTC notional a year, almost all dividends. Most of the ES reduction is one day: on "
            f"5 February 2026 STRC fell {n['strc_feb_five']}% as BTC fell {n['strc_feb_five_btc']}%, and the hedge earned {n['strc_feb_five_hedge']}% (without "
            f"that day the reduction is {n['strc_es_ex_feb']}%), but STRC returned to par the next day and the hedge lost "
-           f"{n['strc_feb_six_hedge']}%; over 10 days the ES reduction is {n['strc_es_ten']}%. It paid more lastingly in "
-           f"Strategy's funding squeeze of June 2026 (+{n['strc_jun_hedge']}% while BTC lost {n['strc_jun_btc']}%; STRC's beta "
-           f"to BTC rose from {n['strc_beta_before']} to {n['strc_beta_june']}), then gave it back as the issuer restored par. "
+           f"{n['strc_feb_six_hedge']}%; over 5 and 10 days the ES reduction is {n['strc_es_five']}% and {n['strc_es_ten']}%. It paid "
+           f"more in Strategy's funding squeeze of June 2026 (+{n['strc_jun_hedge']}% while the BTC book lost {n['strc_jun_btc']}% "
+           f"of notional; STRC's beta to BTC rose from {n['strc_beta_before']} to {n['strc_beta_june']}), then gave it back as STRC "
+           f"returned to par and BTC rallied. "
            f"VWAP timing added nothing ({n['strc_d_ratchet']} pp). On the same days the BVIV hedge cut ES by "
            f"{n['strc_bviv_es']}%. The `xyz:STRC` perpetual cost its short {n['strc_carry_perp']}% of notional a year in "
-           f"funding against {n['strc_carry_cash']}% in dividends and borrow on Nasdaq, and one BTC's hedge was "
-           f"{n['strc_oi_share']}% of its open interest."] if "strc_es_always" in n else []),
+           f"funding against {n['strc_carry_cash']}% in dividends and borrow on Nasdaq, a gap of about the riskless rate that a "
+           f"Nasdaq short earning interest on its proceeds would recoup; one BTC's hedge was {n['strc_oi_share']}% of its open interest."] if "strc_es_always" in n else []),
         "<!-- RESULTS:END -->",
     ])
     text = path.read_text()
