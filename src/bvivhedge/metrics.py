@@ -8,9 +8,14 @@ import pandas as pd
 from .constants import DAYS_PER_YEAR
 
 
-def daily_book(pnl: pd.DataFrame, warmup_days: int = 0) -> pd.DataFrame:
-    """Aggregate bar P&L to UTC days, expressed as returns on the BTC notional at the prior close."""
-    day = pnl.index.floor("1D")
+def daily_book(pnl: pd.DataFrame, warmup_days: int = 0, day: pd.Series | None = None) -> pd.DataFrame:
+    """Aggregate bar P&L to UTC days (or to the labels in ``day``, e.g. US trading days), as returns on the
+    BTC notional at the prior close."""
+    if day is not None:
+        keep = day.reindex(pnl.index).notna().to_numpy()
+        pnl, day = pnl[keep], day.reindex(pnl.index)[keep]
+    else:
+        day = pnl.index.floor("1D")
     d = pnl[["btc", "hedge", "funding", "carry", "cost", "traded_notional"]].groupby(day).sum()
     d["notional"] = pnl["notional"].groupby(day).mean()
     d["time_on"] = (pnl["notional"] > 1e-3 * pnl["btc_notional"]).groupby(day).mean()
@@ -31,26 +36,30 @@ def max_drawdown(r: np.ndarray) -> float:
     return float(-(eq / np.maximum.accumulate(eq) - 1).min())
 
 
-def book_metrics(book: pd.DataFrame, base: pd.DataFrame, tail_q: float = 0.05) -> dict[str, float]:
-    """Metrics of one hedged book relative to the unhedged ``base`` (same days)."""
+def book_metrics(book: pd.DataFrame, base: pd.DataFrame, tail_q: float = 0.05,
+                 per_year: float = DAYS_PER_YEAR) -> dict[str, float]:
+    """Metrics of one hedged book relative to the unhedged ``base`` (same days).
+
+    ``per_year`` is the number of rows in a year: 365 calendar days, or 252 for books over US trading days.
+    """
     r, u = book["total"].to_numpy(), base["total"].to_numpy()
     worst = u <= np.quantile(u, tail_q)
     hedge_net = (book["hedge"] - book["cost"]).to_numpy()
     tail_loss = book["btc"].to_numpy()[worst].sum()
     return {
-        "vol": 100 * r.std(ddof=1) * np.sqrt(DAYS_PER_YEAR),
+        "vol": 100 * r.std(ddof=1) * np.sqrt(per_year),
         "var_red": 100 * (1 - r.var(ddof=1) / u.var(ddof=1)),
         "es": 100 * expected_shortfall(r),
         "es_red": 100 * (1 - expected_shortfall(r) / expected_shortfall(u)),
         "mdd": 100 * max_drawdown(r),
         "worst": -100 * r.min(),
-        "ret": 100 * r.mean() * DAYS_PER_YEAR,
-        "hedge_pnl": 100 * book["hedge"].mean() * DAYS_PER_YEAR,
-        "funding": 100 * book["funding"].mean() * DAYS_PER_YEAR,
-        "cost": 100 * book["cost"].mean() * DAYS_PER_YEAR,
-        "carry": 100 * book["carry"].mean() * DAYS_PER_YEAR,
-        "hedge_cost": 100 * (book["carry"] + book["cost"]).mean() * DAYS_PER_YEAR,
-        "turnover": book["traded_notional"].mean() * DAYS_PER_YEAR,
+        "ret": 100 * r.mean() * per_year,
+        "hedge_pnl": 100 * book["hedge"].mean() * per_year,
+        "funding": 100 * book["funding"].mean() * per_year,
+        "cost": 100 * book["cost"].mean() * per_year,
+        "carry": 100 * book["carry"].mean() * per_year,
+        "hedge_cost": 100 * (book["carry"] + book["cost"]).mean() * per_year,
+        "turnover": book["traded_notional"].mean() * per_year,
         "notional": 100 * book["notional"].mean(),
         "time_on": 100 * book["time_on"].mean(),
         "tail_offset": 100 * (-hedge_net[worst].sum() / tail_loss) if tail_loss < 0 else np.nan,

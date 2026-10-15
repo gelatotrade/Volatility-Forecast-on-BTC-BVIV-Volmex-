@@ -1,0 +1,19 @@
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Hedge & ES red. & Var red. & Max DD & Hedge P\&L & Carry & Trading & Notional \\
+\midrule
+\multicolumn{8}{@{}l}{\emph{Short STRC on Nasdaq, frozen rules}} \\
+\quad Always-on (MV) & 24.4 & 25.9 & 53.8 & \ensuremath{-}10.7 & 13.8 & 0.28 & 107 \\
+\quad Always-on, 1.5$\times$ & 21.6 & 26.6 & 55.2 & \ensuremath{-}15.9 & 19.6 & 0.31 & 156 \\
+\quad VWAP-switch & 21.0 & 19.2 & 54.4 & \ensuremath{-}0.7 & 3.8 & 5.82 & 45 \\
+\quad VWAP-ratchet & 24.4 & 26.0 & 53.8 & \ensuremath{-}11.4 & 14.5 & 0.29 & 116 \\
+\addlinespace
+\multicolumn{8}{@{}l}{\emph{Always-on hedges, same trading days}} \\
+\quad Long BVIV perpetual & 48.6 & 33.3 & 42.2 & 12.2 & \ensuremath{-}1.6 & 0.25 & 21 \\
+\quad Half of each & 38.0 & 34.7 & 46.7 & 0.8 & 6.1 & 0.27 & 64 \\
+\addlinespace
+\multicolumn{8}{@{}l}{\emph{From the perpetual's listing (71 trading days), same hedge ratio}} \\
+\quad Short STRC on Nasdaq & -- & 12.4 & -- & \ensuremath{-}22.4 & 7.5 & 0.10 & 55 \\
+\quad Short xyz:STRC perpetual & -- & 15.8 & -- & \ensuremath{-}23.5 & 5.1 & 0.54 & 54 \\
+\bottomrule
+\end{tabular}

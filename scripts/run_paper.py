@@ -258,6 +258,7 @@ def stage_paper(params: MarketParams, cfg: HedgeConfig, selection: dict[str, str
         nums[key.replace("rob.", "rob hi.")] = signed(r['d_hi'])
     live = live_paper(selection, fig_dir, tab_dir, calib)
     nums.update(live)
+    nums.update(strc_paper(selection, fig_dir, tab_dir))
     used = "\n".join(f.read_text() for f in [PAPER / "main.tex", *(tab_dir.glob("*.tex"))] if f.exists())
     report.write_numbers({k: v for k, v in nums.items() if report.macro_name(k) in used}, PAPER / "numbers.tex")
     if PAPER == ROOT / "paper" and live:
@@ -477,6 +478,122 @@ def live_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path, calib_si
     return nums
 
 
+STRC = ROOT / "results" / "strc"
+
+
+def strc_paper(selection: dict[str, str], fig_dir: Path, tab_dir: Path) -> dict:
+    """Table, figure and number macros for the STRC section (results/strc from run_strc.py)."""
+    if not (STRC / "facts.json").exists():
+        return {}
+    facts = json.loads((STRC / "facts.json").read_text())
+    metrics = pd.read_csv(STRC / "metrics.csv", index_col=0)
+    boot = json.loads((STRC / "bootstrap.json").read_text())
+    sens = json.loads((STRC / "sensitivity.json").read_text())
+    daily = pd.read_csv(STRC / "daily.csv", index_col=0, parse_dates=True)
+    sw, rt = selection["switch"], selection["ratchet"]
+    plots.fig_strc(daily.loc[facts["eval_start"]:], fig_dir / "strc.pdf")
+
+    m = metrics.to_dict("index")
+    vs, vx, win = facts["vs_bviv"], facts["vs_bviv_extra"], facts["perp_window"]
+    cols = [("es_red", "ES red.", 1), ("var_red", "Var red.", 1), ("mdd", "Max DD", 1), ("hedge_pnl", "Hedge P\\&L", 1),
+            ("funding", "Carry", 1), ("cost", "Trading", 2), ("notional", "Notional", 0)]
+    short_window = {k: {**v, "es_red": None, "mdd": None} for k, v in ((k, win[k]["always|1"]) for k in ("cash", "perp"))}
+    report.table_panels([
+        ("Short STRC on Nasdaq, frozen rules", [("Always-on (MV)", m["always|1"]), ("Always-on, 1.5$\\times$", m["always|1.5"]),
+                                                ("VWAP-switch", m[sw]), ("VWAP-ratchet", m[rt])]),
+        ("Always-on hedges, same trading days", [("Long BVIV perpetual", vs["BVIV"]), ("Half of each", vs["half each"])]),
+        (f"From the perpetual's listing ({win['days']} trading days), same hedge ratio",
+         [("Short STRC on Nasdaq", short_window["cash"]), ("Short xyz:STRC perpetual", short_window["perp"])]),
+    ], cols, tab_dir / "strc_hedging.tex")
+
+    def date(text):
+        t = pd.Timestamp(text)
+        return f"{t.day} {t:%B %Y}"
+
+    def ci(d):
+        return f"[{signed(d['lo'], 1)}, {signed(d['hi'], 1)}]"
+
+    def pct(x, nd=1):
+        return f"{x:.{nd}f}"
+
+    st, conc, ep, pm, pc, pb = (facts[k] for k in ("stylised", "concentration", "episodes", "perp_market", "perp_capacity", "perp_book"))
+    full, ret, hor = facts["stylised_full"], facts["stylised"]["returns"], vx["es_horizon"]
+    months = pm["funding_by_month_annual_pct"]
+    words = ["no", "one", "two", "three", "four", "all five"]
+    nums = {
+        # instrument and sample
+        "strc ipo": date(facts["ipo"][:10]), "strc eval start": date(facts["eval_start"]), "strc eval end": date(facts["eval_end"]),
+        "strc eval days": f"{facts['eval_days']}", "strc warmup": f"{facts['warmup_days']}",
+        "strc warmup returns": f"{facts['warmup_returns']}", "strc cap": f"{facts['cap']:.1f}",
+        "strc vol ratio": f"{facts['vol_ratio_warmup']:.1f}", "strc gaps": f"{len(facts['hourly_gaps'])}",
+        "strc borrow": f"{facts['costs']['borrow_annual_pct']:g}", "strc fee": f"{facts['costs']['cash_fee_bps']:g}",
+        "strc slip": f"{facts['costs']['cash_slippage_bps']:g}", "strc perp fee": f"{facts['costs']['perp_fee_bps']:g}",
+        "strc perp slip": f"{win['perp_slippage_bps']:.0f}", "strc div rate": f"{facts['dividend_rate_last_pct']:.0f}",
+        "strc corr": f"{st['corr']:.2f}", "strc beta": f"{st['beta']:.2f}", "strc beta before": f"{st['beta_before_june']:.2f}",
+        "strc beta june": f"{st['beta_june']:.2f}", "strc beta after": f"{st['beta_after_june']:.2f}",
+        "strc tail btc": pct(-st["tail_btc_mean"]), "strc tail strc": pct(-st["tail_strc_mean"]),
+        "strc near par": f"{st['share_near_par']:.0f}",
+        "strc min close": f"{full['min_close']:.2f}", "strc min day": date(full["min_day"]),
+        "strc feb five": pct(-ret["2026-02-05"]["strc"]), "strc feb five btc": pct(-ret["2026-02-05"]["btc"]),
+        "strc feb six": pct(ret["2026-02-06"]["strc"]), "strc feb six btc": pct(ret["2026-02-06"]["btc"]),
+        "strc jun rebound": f"{ret['2026-06-29']['strc']:.0f}",
+        # results on Nasdaq
+        "strc es always": m["always|1"]["es_red"], "strc var always": m["always|1"]["var_red"],
+        "strc es always ci": ci(boot["always|1 - Unhedged (es)"]), "strc var always ci": ci(boot["always|1 - Unhedged (var)"]),
+        "strc mdd unhedged": m["Unhedged"]["mdd"], "strc mdd always": m["always|1"]["mdd"],
+        "strc cost always": m["always|1"]["hedge_cost"], "strc notional always": f"{m['always|1']['notional']:.0f}",
+        "strc d ratchet": signed(boot[f"{rt} - always|1 (es)"]["diff"], 1), "strc d ratchet ci": ci(boot[f"{rt} - always|1 (es)"]),
+        "strc d switch": signed(boot[f"{sw} - always|1 (es)"]["diff"], 1), "strc d switch ci": ci(boot[f"{sw} - always|1 (es)"]),
+        "strc d switch var": signed(boot[f"{sw} - always|1 (var)"]["diff"], 1),
+        "strc d switch var ci": ci(boot[f"{sw} - always|1 (var)"]),
+        "strc placebo n": f"{facts['placebo']['n']}", "strc placebo beaten": f"{facts['placebo']['share_beaten']:.0f}",
+        # where it paid, and for how long
+        "strc es ex feb": conc["es_ex_feb5"], "strc es ex june": conc["es_ex_june_best"],
+        "strc june best": words[conc["june_in_best5"]], "strc june tail": words[conc["june_in_tail"]],
+        "strc feb five hedge": pct(ep["feb5"]["always|1"]["hedge_pct"]), "strc feb six hedge": pct(-ep["feb6"]["always|1"]["hedge_pct"]),
+        "strc feb week hedge": signed(ep["feb_week"]["always|1"]["hedge_pct"], 1),
+        "strc feb ratio": f"{facts['hedge_ratio_feb']['2026-02-04']:.1f}",
+        "strc es five": hor["5"]["STRC"], "strc es ten": hor["10"]["STRC"], "strc bviv es ten": hor["10"]["BVIV"],
+        "strc jun days": f"{ep['june_squeeze']['days']}", "strc jun hedge": pct(ep["june_squeeze"]["always|1"]["hedge_pct"]),
+        "strc jun btc": pct(-ep["june_squeeze"]["btc_pct"]), "strc jun bviv": pct(vx["june_squeeze"]["BVIV"]["hedge_pct"]),
+        "strc jun back": pct(-ep["june29"]["always|1"]["hedge_pct"]), "strc jun end": signed(ep["june_to_end"]["always|1"]["hedge_pct"], 1),
+        "strc jun end btc": f"{ep['june_to_end']['btc_pct']:.0f}",
+        "strc feb bviv": pct(vx["feb_week"]["BVIV"]["hedge_pct"]),
+        "strc nov btc": f"{-ep['nov_drawdown']['btc_pct']:.0f}", "strc nov hedge": pct(ep["nov_drawdown"]["always|1"]["hedge_pct"]),
+        # sensitivities
+        "strc es utc": sens["UTC calendar days"]["always|1"]["es_red"], "strc es cap one": sens["cap 1x BTC notional"]["always|1"]["es_red"],
+        "strc es same": sens["same-bar execution"]["always|1"]["es_red"],
+        # the perpetual
+        "strc fund perp": f"{-pm['funding_annual_pct']:.1f}", "strc fund jun": f"{months['2026-06']:.0f}",
+        "strc fund sep": f"{-months['2026-09']:.0f}",
+        "strc carry cash": f"{win['carry_per_notional_pct']['cash']:.1f}", "strc carry perp": f"{win['carry_per_notional_pct']['perp']:.1f}",
+        "strc carry gap": f"{win['carry_per_notional_pct']['cash'] - win['carry_per_notional_pct']['perp']:.1f}",
+        "strc night corr": f"{pm['night_corr']:.2f}", "strc nights": f"{pm['nights']}",
+        "strc weekend corr": f"{pm['weekend_internal_corr_ex_big']:.2f}", "strc weekends": f"{pm['weekends'] - 1}",
+        "strc weekend big": pct(pm["weekend_big_gap_internal_pct"]), "strc weekend big gap": pct(pm["weekend_big_gap_pct"]),
+        "strc weekend big day": date(pm["weekend_big_gap_day"]),
+        "strc listing": date(pm["listing"][:10]),
+        "strc weekend max": pct(pm["weekend_internal_max_pct"]), "strc gap max": f"{pm['weekend_gap_max_pct']:.0f}",
+        "strc perp usd": pct(pm["median_daily_usd"] / 1e6), "strc perp oi": f"{pm['median_oi_usd'] / 1e6:.0f}",
+        "strc cash usd": f"{facts['nasdaq_volume']['median_daily_usd'] / 1e6:.0f}",
+        "strc oi share": f"{pc['median_share_of_oi_pct']:.1f}", "strc hedge usd": f"{pc['median_hedge_usd'] / 1e3:.0f}",
+        "strc book cost": f"{pb['median_sell_cost_bps']:.0f}", "strc book cost hi": f"{pb['p90_sell_cost_bps']:.0f}",
+        "strc book n": f"{pb['snapshots']}",
+        "strc win start": date(win["start"]), "strc win days": f"{win['days']}",
+        "strc win var cash": win["cash"]["always|1"]["var_red"], "strc win var perp": win["perp"]["always|1"]["var_red"],
+        "strc win cost cash": win["cash"]["always|1"]["hedge_cost"], "strc win cost perp": win["perp"]["always|1"]["hedge_cost"],
+        "strc win d var ci": ci(win["perp - cash (var)"]),
+        # against BVIV
+        "strc bviv es": vs["BVIV"]["es_red"], "strc bviv es ex feb": vx["bviv_es_ex_feb5"], "strc bviv var": vs["BVIV"]["var_red"],
+        "strc bviv cost": signed(vs["BVIV"]["hedge_cost"], 1),
+        "strc half es": vs["half each"]["es_red"], "strc half var": vs["half each"]["var_red"], "strc half cost": vs["half each"]["hedge_cost"],
+        "strc hedge corr": f"{vx['hedge_corr']:.2f}", "strc hedge corr ex": f"{vx['hedge_corr_ex_feb']:.2f}",
+        "strc vs bviv ci": ci(boot["STRC - BVIV (es)"]), "strc vs bviv var ci": ci(boot["STRC - BVIV (var)"]),
+        "strc half bviv var ci": ci(boot["half each - BVIV (var)"]),
+    }
+    return nums
+
+
 def write_readme_results(live: pd.DataFrame, rows: list[tuple[str, str]], nums: dict, path: Path = ROOT / "README.md"):
     """Regenerate the README's key-results block from the same numbers as the paper."""
     def plain(v):
@@ -520,6 +637,20 @@ def write_readme_results(live: pd.DataFrame, rows: list[tuple[str, str]], nums: 
         f"paths) the ratchet beats the always-on hedge by {n['d_es_ratchet']} pp on average but its placebo by only "
         f"{n['d_es_placebo']} pp. "
         f"Without a core hedge, VWAP timing adds {n['live_grid_zero']} pp on live data.",
+        *([f"6. **Short STRC protects for days, not weeks.** Shorting Strategy's STRC preferred on Nasdaq "
+           f"({n['strc_eval_start']} to {n['strc_eval_end']}, {n['strc_eval_days']} US trading days, same frozen rules) cut daily ES by "
+           f"{n['strc_es_always']}% (CI {n['strc_es_always_ci']}) and variance by {n['strc_var_always']}%, at "
+           f"{n['strc_cost_always']}% of BTC notional a year, almost all dividends. Most of the ES reduction is one day: on "
+           f"5 February 2026 STRC fell {n['strc_feb_five']}% as BTC fell {n['strc_feb_five_btc']}%, and the hedge earned {n['strc_feb_five_hedge']}% (without "
+           f"that day the reduction is {n['strc_es_ex_feb']}%), but STRC returned to par the next day and the hedge lost "
+           f"{n['strc_feb_six_hedge']}%; over 5 and 10 days the ES reduction is {n['strc_es_five']}% and {n['strc_es_ten']}%. It paid "
+           f"more in Strategy's funding squeeze of June 2026 (+{n['strc_jun_hedge']}% while the BTC book lost {n['strc_jun_btc']}% "
+           f"of notional; STRC's beta to BTC rose from {n['strc_beta_before']} to {n['strc_beta_june']}), then gave it back as STRC "
+           f"returned to par and BTC rallied. "
+           f"VWAP timing added nothing ({n['strc_d_ratchet']} pp). On the same days the BVIV hedge cut ES by "
+           f"{n['strc_bviv_es']}%. The `xyz:STRC` perpetual cost its short {n['strc_carry_perp']}% of notional a year in "
+           f"funding against {n['strc_carry_cash']}% in dividends and borrow on Nasdaq, a gap of about the riskless rate that a "
+           f"Nasdaq short earning interest on its proceeds would recoup; one BTC's hedge was {n['strc_oi_share']}% of its open interest."] if "strc_es_always" in n else []),
         "<!-- RESULTS:END -->",
     ])
     text = path.read_text()

@@ -167,3 +167,31 @@ def fig_live_timing(placebo: pd.DataFrame, real: float, grid: pd.DataFrame, path
     ax.grid(axis="x", visible=False)
     fig.savefig(path, metadata=UNSTAMPED)
     plt.close(fig)
+
+
+def fig_strc(daily: pd.DataFrame, path: str):
+    """STRC and its perpetual, BTC, and where each hedge paid: cumulative hedge P&L over US trading days."""
+    fig, axes = plt.subplots(3, 1, figsize=(WIDTH, 2.9), sharex=True,
+                             gridspec_kw={"hspace": 0.6, "height_ratios": [1, 0.8, 1.1]})
+    ax = axes[0]
+    ax.axhline(100, color=AXIS, lw=0.8, ls=(0, (3, 2)))
+    ax.plot(daily.index, daily["strc"], color=INK, lw=1.0, label="Nasdaq close")
+    ax.plot(daily.index, daily["perp"], color=ORANGE, lw=1.0, label="xyz:STRC perpetual (16:00 ET)")
+    ax.set_title("STRC (USD; dashed: the \\$100 stated amount)", color=INK, pad=12)
+    ax.legend(loc="lower left", bbox_to_anchor=(0.0, 0.97), ncol=2, handlelength=1.4, borderaxespad=0)
+    ax = axes[1]
+    ax.plot(daily.index, daily["btc"], color=MUTED, lw=1.0)
+    ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v / 1000:,.0f}k"))
+    ax.set_title("BTC (USD, 16:00 ET)", color=INK)
+    ax = axes[2]
+    ax.axhline(0, color=AXIS, lw=0.8)
+    for key, label, color in (("strc_always", "short STRC", BLUE), ("bviv_always", "long BVIV perpetual", ORANGE),
+                              ("half", "half of each", AQUA)):
+        ax.plot(daily.index, 100 * daily[f"{key}|hedge"].fillna(0.0).cumsum(), color=color, lw=1.2, label=label)
+    ax.set_title("Cumulative hedge P&L net of carry and costs (% of BTC notional)", color=INK, pad=12)
+    ax.legend(loc="lower left", bbox_to_anchor=(0.0, 0.97), ncol=3, handlelength=1.4, borderaxespad=0)
+    ax.xaxis.set_major_locator(matplotlib.dates.MonthLocator(bymonth=(1, 4, 7, 10)))
+    ax.xaxis.set_minor_locator(matplotlib.dates.MonthLocator())
+    ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%b %Y"))
+    fig.savefig(path, metadata=UNSTAMPED)
+    plt.close(fig)

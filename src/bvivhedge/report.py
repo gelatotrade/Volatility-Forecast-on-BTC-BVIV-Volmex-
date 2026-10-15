@@ -101,3 +101,18 @@ def table_live_sensitivity(sens: dict, rules: list[tuple[str, str]], path: str |
     Path(path).write_text(
         f"\\begin{{tabular}}{{@{{}}l{'r' * len(rules)}@{{}}}}\n\\toprule\nVariant & {head} \\\\\n\\midrule\n"
         + "\n".join(body) + "\n\\bottomrule\n\\end{tabular}\n")
+
+
+def table_panels(panels: list[tuple[str, list[tuple[str, dict]]]], cols: list[tuple[str, str, int]], path: str | Path):
+    """Rows of metric dicts grouped in titled panels (e.g. one instrument or sample window per panel)."""
+    head = " & ".join(c[1] for c in cols)
+    body = []
+    for i, (title, rows) in enumerate(panels):
+        if i:
+            body.append("\\addlinespace")
+        body.append(f"\\multicolumn{{{len(cols) + 1}}}{{@{{}}l}}{{\\emph{{{title}}}}} \\\\")
+        for label, m in rows:
+            body.append(f"\\quad {label} & " + " & ".join(_fmt(m.get(c), nd) for c, _, nd in cols) + " \\\\")
+    Path(path).write_text(
+        f"\\begin{{tabular}}{{@{{}}l{'r' * len(cols)}@{{}}}}\n\\toprule\nHedge & {head} \\\\\n\\midrule\n"
+        + "\n".join(body) + "\n\\bottomrule\n\\end{tabular}\n")
